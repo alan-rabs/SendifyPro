@@ -201,241 +201,135 @@ export async function startBot() {
 
 async function processMessage(msg: any): Promise<boolean> {
   try {
-    // Get chat to check the name
     const chat = await msg.getChat();
-    
-    // Find matching chat config
     const chatConfig = config.chatConfigs?.find((c: any) => c && c.targetContact && (chat.name === c.targetContact || chat.name === c.targetContact.trim()));
     
-    if (!chatConfig) {
-      return false;
-    }
+    if (!chatConfig) return false;
 
     const direction = chatConfig.messageDirection || 'both';
-    if (direction === 'received' && msg.fromMe) {
-      return false;
-    }
-    if (direction === 'sent' && !msg.fromMe) {
-      return false;
-    }
+    if (direction === 'received' && msg.fromMe) return false;
+    if (direction === 'sent' && !msg.fromMe) return false;
 
-    log('DEBUG', `Mensaje recibido de ${chat.name}: tipo=${msg.type}, body="${msg.body}"`);
+    if (db.isMessageProcessed(msg.id._serialized)) return false;
 
-    // Check if message was already processed
-    if (db.isMessageProcessed(msg.id._serialized)) {
-      log('DEBUG', `Mensaje ya procesado: ${msg.id._serialized}`);
+    log('DEBUG', `Mensaje en "${chat.name}": tipo=${msg.type}, body="${msg.body.substring(0, 50)}${msg.body.length > 50 ? '...' : ''}"`);
+
+    const rules = chatConfig.rules || [];
+    if (rules.length === 0) {
+      db.markMessageProcessed(msg.id._serialized);
       return false;
     }
 
     let didProcessSomething = false;
+    let media: any = null;
+    let textContent = msg.body || '';
 
-    // 1. Check for text errors or text success
-    if (msg.type === 'chat') {
-      const text = msg.body.trim();
-      log('DEBUG', `Evaluando texto: "${text}" contra triggerError: "${chatConfig.triggerError}"`);
-      
-      if (chatConfig.triggerError && text.includes(chatConfig.triggerError)) {
-        const trigger = chatConfig.triggerError;
-        const parts = text.split(trigger);
-        
-        for (let i = 1; i < parts.length; i++) {
-          const errorBlock = parts[i];
-          const errorBlockLower = errorBlock.toLowerCase();
-          
-          const nssWords = chatConfig.triggerNssWord.split(',').map((w: string) => w.trim().toLowerCase());
-          const curpWords = chatConfig.triggerCurpWord.split(',').map((w: string) => w.trim().toLowerCase());
-
-          const isNssError = nssWords.some(w => errorBlockLower.includes(w));
-          const isCurpError = curpWords.some(w => errorBlockLower.includes(w));
-          
-          if (isNssError || isCurpError) {
-            const flagType = isNssError ? 'NSS' : 'CURP';
-            const signature = crypto.createHash('md5').update(errorBlockLower + '_' + msg.id._serialized).digest('hex');
-            
-            if (!db.isTextSignatureProcessed(signature)) {
-              log('WARN', `Detectado error de ${flagType} en el mensaje. Enviando alerta...`);
-              
-              const nssMatch = errorBlock.match(/\b\d{11}\b/);
-              const curpMatch = errorBlock.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/i);
-              
-              const nss = nssMatch ? nssMatch[0] : "NO_ENCONTRADO";
-              const curp = curpMatch ? curpMatch[0].toUpperCase() : "NO_ENCONTRADO";
-              
-              let subject = isNssError ? (chatConfig.actionNssSubject || '{original_message}') : (chatConfig.actionCurpSubject || '{original_message}');
-              let body = isNssError ? (chatConfig.actionNssBody || 'El NSS no se encontró o no está asociado al CURP') : (chatConfig.actionCurpBody || 'La CURP no tiene el formato correcto.');
-              
-              const originalMsgPart = trigger + errorBlock;
-              subject = subject.replace(/{original_message}/g, originalMsgPart).replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-              body = body.replace(/{original_message}/g, originalMsgPart).replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-              
-              let emailSent = false;
-              let waSent = false;
-              
-              if ((isNssError && chatConfig.nssActionEmailEnabled !== false) || (isCurpError && chatConfig.curpActionEmailEnabled !== false)) {
-                const caseType = isNssError ? 'ERROR_NSS' : 'ERROR_CURP';
-                const sent = await queueOrSendEmail(subject, body, null, chatConfig.emailDestino, chatConfig.emailBcc, caseType);
-                if (sent) emailSent = true;
-              }
-
-              if (isNssError && chatConfig.nssActionWaEnabled) {
-                const waMsg = (chatConfig.nssWaMessage || 'Error NSS detectado: {original_message}').replace(/{original_message}/g, originalMsgPart).replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-                const sent = await sendToWhatsAppChats(chatConfig.nssWaTargets, waMsg);
-                if (sent) waSent = true;
-              } else if (isCurpError && chatConfig.curpActionWaEnabled) {
-                const waMsg = (chatConfig.curpWaMessage || 'Error CURP detectado: {original_message}').replace(/{original_message}/g, originalMsgPart).replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-                const sent = await sendToWhatsAppChats(chatConfig.curpWaTargets, waMsg);
-                if (sent) waSent = true;
-              }
-
-              if (emailSent || waSent) {
-                db.markTextSignatureProcessed(signature);
-                db.incrementStat('errorsDetected');
-                if (emailSent) db.incrementStat('emailsSent');
-                
-                log('INFO', `✅ Alerta de error ${flagType} procesada.`);
-                logAudit(chat.name, `ERROR_${flagType}`, nss, curp, originalMsgPart, body);
-                didProcessSomething = true;
-              }
-            }
-          }
-        }
-      } else {
-        // SUCCESS_TEXT logic (multiple matches)
-        const nssMatches = text.match(/\b\d{11}\b/g) || [];
-        const curpMatches = text.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/gi) || [];
-        
-        const maxMatches = Math.max(nssMatches.length, curpMatches.length);
-        
-        if (maxMatches > 0) {
-          for (let i = 0; i < maxMatches; i++) {
-            const nss = nssMatches[i] || "NO_ENCONTRADO";
-            const curp = curpMatches[i] ? curpMatches[i].toUpperCase() : "NO_ENCONTRADO";
-            
-            const signature = crypto.createHash('md5').update(`${nss}_${curp}_${msg.id._serialized}`).digest('hex');
-            
-            if (!db.isTextSignatureProcessed(signature)) {
-              let subject = (chatConfig.actionPdfSubject || 'NSS: {nss} - CURP: {curp}')
-                .replace(/{nss}/g, nss)
-                .replace(/{curp}/g, curp)
-                .replace(/{original_message}/g, text);
-                
-              let body = (chatConfig.actionPdfBody || 'Datos procesados automáticamente.')
-                .replace(/{nss}/g, nss)
-                .replace(/{curp}/g, curp)
-                .replace(/{original_message}/g, text);
-                
-              let emailSent = false;
-              let waSent = false;
-
-              if (chatConfig.pdfActionEmailEnabled !== false) {
-                const sent = await queueOrSendEmail(subject, body, null, chatConfig.emailDestino, chatConfig.emailBcc, 'SUCCESS_TEXT');
-                if (sent) emailSent = true;
-              }
-
-              if (chatConfig.pdfActionWaEnabled) {
-                const waMsg = (chatConfig.pdfWaMessage || 'Datos procesados: {nss} - {curp}')
-                  .replace(/{nss}/g, nss)
-                  .replace(/{curp}/g, curp)
-                  .replace(/{original_message}/g, text);
-                const sent = await sendToWhatsAppChats(chatConfig.pdfWaTargets, waMsg);
-                if (sent) waSent = true;
-              }
-
-              if (emailSent || waSent) {
-                db.markTextSignatureProcessed(signature);
-                db.incrementStat('processedPdfs'); 
-                if (emailSent) db.incrementStat('emailsSent');
-                
-                log('INFO', `✅ Texto con datos procesado con éxito.`);
-                // No logueamos SUCCESS_TEXT en el CSV
-                didProcessSomething = true;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // 2. Check for files
     if (msg.hasMedia) {
-      const media = await msg.downloadMedia();
-      if (media && media.mimetype === chatConfig.fileType) {
-        log('INFO', `📄 Archivo ${chatConfig.fileType} detectado. Descargando y procesando en memoria...`);
-        
-        const pdfBuffer = Buffer.from(media.data, 'base64');
-        const fileHash = crypto.createHash('md5').update(pdfBuffer).digest('hex');
-
-        if (db.isPdfProcessed(fileHash)) {
-          log('WARN', '♻️ Este PDF ya fue procesado anteriormente (detectado por contenido). Ignorando.');
-        } else {
-          // Parse PDF
-          try {
-            const pdfData = await pdf(pdfBuffer);
-            const textContent = pdfData.text;
-            
-            const nssMatches = textContent.match(/\b\d{11}\b/g) || [];
-            const curpMatches = textContent.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/gi) || [];
-            
-            const maxMatches = Math.max(nssMatches.length, curpMatches.length);
-            
-            if (maxMatches > 0) {
-              let anySent = false;
-              for (let i = 0; i < maxMatches; i++) {
-                const nss = nssMatches[i] || "NO_ENCONTRADO";
-                const curp = curpMatches[i] ? curpMatches[i].toUpperCase() : "NO_ENCONTRADO";
-                
-                let subject = (chatConfig.actionPdfSubject || 'NSS: {nss} - CURP: {curp}').replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-                let body = (chatConfig.actionPdfBody || 'Adjunto PDF procesado automáticamente.').replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-                
-                log('INFO', `Datos extraídos del PDF -> ${subject}`);
-  
-                let emailSent = false;
-                let waSent = false;
-  
-                if (chatConfig.pdfActionEmailEnabled !== false) {
-                  const sent = await queueOrSendEmail(subject, body, {
-                    filename: media.filename || `documento_${Date.now()}.pdf`,
-                    content: pdfBuffer
-                  }, chatConfig.emailDestino, chatConfig.emailBcc, 'SUCCESS_PDF');
-                  if (sent) emailSent = true;
-                }
-  
-                if (chatConfig.pdfActionWaEnabled) {
-                  const waMsg = (chatConfig.pdfWaMessage || 'Adjunto PDF procesado: {nss} - {curp}').replace(/{nss}/g, nss).replace(/{curp}/g, curp);
-                  const sent = await sendToWhatsAppChats(chatConfig.pdfWaTargets, waMsg, media);
-                  if (sent) waSent = true;
-                }
-  
-                if (emailSent || waSent) {
-                  anySent = true;
-                  db.incrementStat('processedPdfs');
-                  if (emailSent) db.incrementStat('emailsSent');
-                  log('INFO', `✅ Registro de PDF procesado con éxito (${nss} / ${curp}).`);
-                  logAudit(chat.name, 'SUCCESS_PDF', nss, curp, media.filename || 'documento.pdf');
-                }
-              }
-              
-              if (anySent) {
-                db.markPdfProcessed(fileHash);
-                didProcessSomething = true;
-              } else if (chatConfig.pdfActionEmailEnabled || chatConfig.pdfActionWaEnabled) {
-                log('ERROR', '❌ Fallaron las acciones configuradas para el PDF.');
-              } else {
-                log('WARN', '⚠️ Se procesó un PDF pero no hay acciones habilitadas.');
-              }
-            } else {
-              log('WARN', '⚠️ No se encontraron NSS ni CURP en el PDF.');
-            }
-          } catch (pdfErr: any) {
-            log('ERROR', `Error al parsear PDF: ${pdfErr.message}`);
-          }
+      media = await msg.downloadMedia();
+      if (media && media.mimetype === 'application/pdf') {
+        try {
+          const pdfBuffer = Buffer.from(media.data, 'base64');
+          const pdfData = await pdf(pdfBuffer);
+          textContent = pdfData.text;
+        } catch (e) {
+          log('ERROR', `Error al extraer texto de PDF: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     }
 
-    // Mark message as processed so we don't evaluate it again on restart
-    db.markMessageProcessed(msg.id._serialized);
+    // Extract NSS and CURP for placeholders if possible
+    const nssMatch = textContent.match(/\b\d{11}\b/);
+    const curpMatch = textContent.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/i);
+    const nss = nssMatch ? nssMatch[0] : "NO_ENCONTRADO";
+    const curp = curpMatch ? curpMatch[0].toUpperCase() : "NO_ENCONTRADO";
 
+    for (const rule of rules) {
+      let isMatch = false;
+
+      if (rule.type === 'text') {
+        const text = textContent.trim();
+        const trigger = (rule.triggerValue || '').trim();
+        
+        if (rule.subtype === 'exact') {
+          isMatch = text.toLowerCase() === trigger.toLowerCase();
+        } else if (rule.subtype === 'contains') {
+          isMatch = text.toLowerCase().includes(trigger.toLowerCase());
+        } else if (rule.subtype === 'regex') {
+          try {
+            const re = new RegExp(trigger, 'i');
+            isMatch = re.test(text);
+          } catch (e) {
+            log('ERROR', `Regex inválido en regla "${rule.name}": ${trigger}`);
+          }
+        }
+      } else if (rule.type === 'file') {
+        if (msg.hasMedia && media) {
+          const mime = media.mimetype.toLowerCase();
+          const subtype = rule.subtype;
+          const trigger = (rule.triggerValue || '').trim().toLowerCase();
+
+          let typeMatch = false;
+          if (subtype === 'pdf') typeMatch = mime.includes('pdf');
+          else if (subtype === 'image') typeMatch = mime.includes('image');
+          else if (subtype === 'video') typeMatch = mime.includes('video');
+          else if (subtype === 'doc') typeMatch = mime.includes('word') || mime.includes('officedocument') || mime.includes('msword');
+          else if (subtype === 'any') typeMatch = true;
+
+          if (typeMatch) {
+            if (trigger === '') {
+              isMatch = true;
+            } else {
+              // If there's a trigger value, check if it's in the text content (for PDFs) or filename
+              const filename = (media.filename || '').toLowerCase();
+              isMatch = textContent.toLowerCase().includes(trigger) || filename.includes(trigger);
+            }
+          }
+        }
+      }
+
+      if (isMatch) {
+        log('INFO', `🎯 Regla disparada: "${rule.name}" en chat "${chat.name}"`);
+        
+        let emailSent = false;
+        let waSent = false;
+
+        // Process Email Action
+        if (rule.emailEnabled) {
+          const subject = replacePlaceholders(rule.emailSubject || 'Alerta de Regla: {rule_name}', textContent, nss, curp, rule.name);
+          const body = replacePlaceholders(rule.emailBody || 'Se ha detectado una coincidencia con la regla {rule_name}.', textContent, nss, curp, rule.name);
+          
+          const attachment = (msg.hasMedia && media) ? {
+            filename: media.filename || `archivo_${Date.now()}.${media.mimetype.split('/')[1] || 'bin'}`,
+            content: Buffer.from(media.data, 'base64')
+          } : null;
+
+          const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, rule.name);
+          if (sent) emailSent = true;
+        }
+
+        // Process WhatsApp Action
+        if (rule.waEnabled) {
+          const waMsg = replacePlaceholders(rule.waMessage || 'Regla disparada: {rule_name}', textContent, nss, curp, rule.name);
+          const sent = await sendToWhatsAppChats(rule.waTargets, waMsg, (msg.hasMedia && media) ? media : null);
+          if (sent) waSent = true;
+        }
+
+        if (emailSent || waSent) {
+          didProcessSomething = true;
+          if (emailSent) db.incrementStat('emailsSent');
+          if (rule.type === 'file' && rule.subtype === 'pdf') db.incrementStat('processedPdfs');
+          else db.incrementStat('errorsDetected'); // Generic "event detected"
+
+          logAudit(chat.name, rule.name, nss, curp, textContent.substring(0, 200), rule.emailEnabled ? 'Email' : '' + (rule.waEnabled ? ' WA' : ''));
+        }
+
+        if (chatConfig.processingMode === 'simple') {
+          break; // Stop after first match
+        }
+      }
+    }
+
+    db.markMessageProcessed(msg.id._serialized);
     return didProcessSomething;
 
   } catch (err: any) {
@@ -443,6 +337,15 @@ async function processMessage(msg: any): Promise<boolean> {
     return false;
   }
 }
+
+function replacePlaceholders(template: string, originalText: string, nss: string, curp: string, ruleName: string) {
+  return template
+    .replace(/{original_message}/g, originalText)
+    .replace(/{nss}/g, nss)
+    .replace(/{curp}/g, curp)
+    .replace(/{rule_name}/g, ruleName);
+}
+
 
 export async function stopBot() {
   if (!client) {

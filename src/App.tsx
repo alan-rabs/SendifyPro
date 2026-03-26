@@ -14,6 +14,7 @@ import {
   Trash2, 
   ChevronDown, 
   ChevronUp,
+  ChevronLeft,
   Mail,
   MessageSquare,
   Github,
@@ -64,35 +65,28 @@ interface LogEntry {
   message: string;
 }
 
+interface AutomationRule {
+  id: string;
+  name: string;
+  type: 'text' | 'file';
+  subtype: string; // 'exact', 'contains', 'regex' for text; 'pdf', 'image', 'video', 'doc', 'any' for file
+  triggerValue: string;
+  emailEnabled: boolean;
+  emailTargets: string;
+  emailSubject: string;
+  emailBody: string;
+  waEnabled: boolean;
+  waTargets: string;
+  waMessage: string;
+}
+
 interface ChatConfig {
   id: string;
   targetContact: string;
-  emailDestino: string;
+  messageDirection: 'received' | 'sent' | 'both';
+  processingMode: 'simple' | 'exhaustive';
+  rules: AutomationRule[];
   emailBcc?: string;
-  sourceApp: string;
-  fileType: string;
-  triggerError: string;
-  triggerNssWord: string;
-  triggerCurpWord: string;
-  messageDirection?: 'received' | 'sent' | 'both';
-  pdfActionEmailEnabled: boolean;
-  pdfActionWaEnabled: boolean;
-  pdfWaTargets: string;
-  pdfWaMessage: string;
-  actionPdfSubject: string;
-  actionPdfBody: string;
-  nssActionEmailEnabled: boolean;
-  nssActionWaEnabled: boolean;
-  nssWaTargets: string;
-  nssWaMessage: string;
-  actionNssSubject: string;
-  actionNssBody: string;
-  curpActionEmailEnabled: boolean;
-  curpActionWaEnabled: boolean;
-  curpWaTargets: string;
-  curpWaMessage: string;
-  actionCurpSubject: string;
-  actionCurpBody: string;
 }
 
 interface AuditTemplate {
@@ -156,15 +150,47 @@ const Card = ({ children, title, icon: Icon, className = "" }: { children: React
   </div>
 );
 
-const StatCard = ({ label, value, icon: Icon, colorClass }: { label: string, value: number | string, icon: any, colorClass: string }) => (
-  <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex items-center gap-4">
-    <div className={`p-3 rounded-lg ${colorClass} bg-opacity-10`}>
-      <Icon size={24} className={colorClass.replace('bg-', 'text-')} />
+const StatCard = ({ label, value, icon: Icon, colorClass, children, isExpanded, onToggle }: { label: string, value: number | string, icon: any, colorClass: string, children?: React.ReactNode, isExpanded?: boolean, onToggle?: () => void }) => (
+  <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden flex flex-col">
+    <div className="p-4 flex items-center justify-between">
+      <div className="flex items-center gap-4">
+        <div className={`p-3 rounded-lg ${colorClass} bg-opacity-10`}>
+          <Icon size={24} className={colorClass.replace('bg-', 'text-')} />
+        </div>
+        <div>
+          <p className="text-xs text-zinc-500 uppercase tracking-widest font-medium">{label}</p>
+          <p className="text-2xl font-mono font-bold text-zinc-100">{value}</p>
+        </div>
+      </div>
+      {children && (
+        <button 
+          onClick={onToggle}
+          className="p-2 text-zinc-500 hover:text-zinc-300 transition-colors rounded-lg hover:bg-zinc-800"
+        >
+          <motion.div
+            animate={{ rotate: isExpanded ? 180 : 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <ChevronDown size={20} />
+          </motion.div>
+        </button>
+      )}
     </div>
-    <div>
-      <p className="text-xs text-zinc-500 uppercase tracking-widest font-medium">{label}</p>
-      <p className="text-2xl font-mono font-bold text-zinc-100">{value}</p>
-    </div>
+    <AnimatePresence>
+      {isExpanded && children && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          exit={{ height: 0, opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="border-t border-zinc-800/50 bg-zinc-900/50"
+        >
+          <div className="p-4">
+            {children}
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   </div>
 );
 
@@ -177,6 +203,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'audit' | 'update' | 'help'>('dashboard');
   const [isSaving, setIsSaving] = useState(false);
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [expandedStats, setExpandedStats] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -323,31 +351,11 @@ export default function App() {
     if (!config) return;
     const newChat: ChatConfig = {
       id: Math.random().toString(36).substr(2, 9),
-      targetContact: 'Nuevo Chat',
-      emailDestino: '',
-      sourceApp: 'whatsapp',
-      fileType: 'application/pdf',
-      triggerError: '//404//',
-      triggerNssWord: 'nss',
-      triggerCurpWord: 'curp',
-      pdfActionEmailEnabled: true,
-      pdfActionWaEnabled: false,
-      pdfWaTargets: '',
-      pdfWaMessage: 'Adjunto PDF procesado: {nss} - {curp}',
-      actionPdfSubject: 'NSS: {nss} - CURP: {curp}',
-      actionPdfBody: 'Adjunto PDF procesado automáticamente.',
-      nssActionEmailEnabled: true,
-      nssActionWaEnabled: false,
-      nssWaTargets: '',
-      nssWaMessage: 'Error NSS detectado: {original_message}',
-      actionNssSubject: '{original_message}',
-      actionNssBody: 'El NSS no se encontró o no está asociado al CURP',
-      curpActionEmailEnabled: true,
-      curpActionWaEnabled: false,
-      curpWaTargets: '',
-      curpWaMessage: 'Error CURP detectado: {original_message}',
-      actionCurpSubject: '{original_message}',
-      actionCurpBody: 'La CURP no tiene el formato correcto.'
+      targetContact: 'Nuevo Chat / Grupo',
+      messageDirection: 'both',
+      processingMode: 'simple',
+      rules: [],
+      emailBcc: ''
     };
     setConfig({ ...config, chatConfigs: [...config.chatConfigs, newChat] });
     setExpandedChat(newChat.id);
@@ -367,6 +375,47 @@ export default function App() {
     });
   };
 
+  const addRule = (chatId: string) => {
+    if (!config) return;
+    const newRule: AutomationRule = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: 'Nueva Regla',
+      type: 'text',
+      subtype: 'contains',
+      triggerValue: '',
+      emailEnabled: false,
+      emailTargets: '',
+      emailSubject: 'Alerta: Coincidencia detectada',
+      emailBody: 'Se ha detectado una coincidencia en el mensaje: {original_message}',
+      waEnabled: false,
+      waTargets: '',
+      waMessage: 'Alerta: Coincidencia detectada en el mensaje: {original_message}'
+    };
+    setConfig({
+      ...config,
+      chatConfigs: config.chatConfigs.map(c => c.id === chatId ? { ...c, rules: [...(c.rules || []), newRule] } : c)
+    });
+  };
+
+  const removeRule = (chatId: string, ruleId: string) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      chatConfigs: config.chatConfigs.map(c => c.id === chatId ? { ...c, rules: c.rules.filter(r => r.id !== ruleId) } : c)
+    });
+  };
+
+  const updateRule = (chatId: string, ruleId: string, field: keyof AutomationRule, value: any) => {
+    if (!config) return;
+    setConfig({
+      ...config,
+      chatConfigs: config.chatConfigs.map(c => c.id === chatId ? {
+        ...c,
+        rules: c.rules.map(r => r.id === ruleId ? { ...r, [field]: value } : r)
+      } : c)
+    });
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'running': return <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs font-bold uppercase tracking-wider border border-emerald-500/20"><CheckCircle2 size={14} /> En Ejecución</span>;
@@ -383,108 +432,167 @@ export default function App() {
       <Toaster position="top-right" theme="dark" richColors closeButton />
       
       {/* Sidebar */}
-      <div className="fixed left-0 top-0 bottom-0 w-64 bg-zinc-950 border-r border-zinc-900 flex flex-col z-50">
-        <div className="p-6 border-b border-zinc-900">
+      <motion.div 
+        animate={{ width: isSidebarCollapsed ? '80px' : '256px' }}
+        transition={{ duration: 0.3, ease: "easeInOut" }}
+        className="fixed left-0 top-0 bottom-0 bg-zinc-950 border-r border-zinc-900 flex flex-col z-50 overflow-hidden"
+      >
+        <div className="p-6 border-b border-zinc-900 flex items-center justify-between shrink-0 h-20">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-zinc-100 rounded-lg flex items-center justify-center text-black font-bold text-xl">S</div>
-            <div>
-              <h1 className="text-lg font-bold text-zinc-100 tracking-tight">Sendify PRO</h1>
-              <p className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-bold">WhatsApp Bot PRO</p>
-            </div>
+            <div className="w-10 h-10 bg-zinc-100 rounded-lg flex items-center justify-center text-black font-bold text-xl shrink-0">S</div>
+            <AnimatePresence>
+              {!isSidebarCollapsed && (
+                <motion.div
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: 'auto' }}
+                  exit={{ opacity: 0, width: 0 }}
+                  className="whitespace-nowrap overflow-hidden"
+                >
+                  <h1 className="text-lg font-bold text-zinc-100 tracking-tight leading-none">Sendify PRO</h1>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-[0.2em] font-bold mt-1">WhatsApp Bot PRO</p>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
+          <button 
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            className="text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
+          >
+            <ChevronLeft size={20} className={`transform transition-transform duration-300 ${isSidebarCollapsed ? 'rotate-180' : ''}`} />
+          </button>
         </div>
 
-        <nav className="flex-1 p-4 space-y-2">
-          <button 
-            onClick={() => setActiveTab('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'}`}
-          >
-            <Activity size={18} /> Dashboard
-          </button>
-          <button 
-            onClick={() => setActiveTab('settings')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'settings' ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'}`}
-          >
-            <Settings size={18} /> Configuración
-          </button>
-          <button 
-            onClick={() => setActiveTab('audit')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'audit' ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'}`}
-          >
-            <FileText size={18} /> Auditoría
-          </button>
-          <button 
-            onClick={() => setActiveTab('update')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'update' ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'}`}
-          >
-            <Github size={18} /> Actualización
-          </button>
-          <button 
-            onClick={() => setActiveTab('help')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'help' ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'}`}
-          >
-            <HelpCircle size={18} /> Ayuda y Guía
-          </button>
+        <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
+          {[
+            { id: 'dashboard', icon: Activity, label: 'Dashboard' },
+            { id: 'settings', icon: Settings, label: 'Configuración' },
+            { id: 'audit', icon: FileText, label: 'Auditoría' },
+            { id: 'update', icon: Github, label: 'Actualización' },
+            { id: 'help', icon: HelpCircle, label: 'Ayuda y Guía' }
+          ].map((item) => (
+            <button 
+              key={item.id}
+              onClick={() => setActiveTab(item.id as any)}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === item.id ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'} ${isSidebarCollapsed ? 'justify-center px-0' : ''}`}
+              title={isSidebarCollapsed ? item.label : undefined}
+            >
+              <item.icon size={18} className="shrink-0" /> 
+              <AnimatePresence>
+                {!isSidebarCollapsed && (
+                  <motion.span
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: 'auto' }}
+                    exit={{ opacity: 0, width: 0 }}
+                    className="whitespace-nowrap overflow-hidden"
+                  >
+                    {item.label}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </button>
+          ))}
         </nav>
 
-        <div className="p-6 border-t border-zinc-900">
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Estado</span>
-            {status && getStatusBadge(status.status)}
+        <div className="p-6 border-t border-zinc-900 shrink-0">
+          <div className={`flex items-center justify-between mb-4 ${isSidebarCollapsed ? 'flex-col gap-2' : ''}`}>
+            <AnimatePresence>
+              {!isSidebarCollapsed && (
+                <motion.span 
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: 'auto' }}
+                  exit={{ opacity: 0, width: 0 }}
+                  className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest whitespace-nowrap overflow-hidden"
+                >
+                  Estado
+                </motion.span>
+              )}
+            </AnimatePresence>
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md border ${
+              status?.status === 'running' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' :
+              status?.status === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-500' :
+              'bg-zinc-800/50 border-zinc-700 text-zinc-400'
+            }`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${
+                status?.status === 'running' ? 'bg-emerald-500 animate-pulse' :
+                status?.status === 'error' ? 'bg-rose-500' :
+                'bg-zinc-500'
+              }`} />
+              <AnimatePresence>
+                {!isSidebarCollapsed && (
+                  <motion.span 
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: 'auto' }}
+                    exit={{ opacity: 0, width: 0 }}
+                    className="text-[10px] uppercase font-bold tracking-wider whitespace-nowrap overflow-hidden"
+                  >
+                    {status?.status || 'Desconocido'}
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
           <div className="space-y-2">
             {status?.status === 'stopped' || status?.status === 'error' ? (
               <button 
                 onClick={handleStartBot}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-500 transition-colors"
+                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-500 transition-colors ${isSidebarCollapsed ? 'px-0' : ''}`}
+                title={isSidebarCollapsed ? "Iniciar Bot" : undefined}
               >
-                <Play size={16} fill="currentColor" /> Iniciar Bot
+                <Play size={16} fill="currentColor" className="shrink-0" /> 
+                <AnimatePresence>
+                  {!isSidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: 'auto' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      className="whitespace-nowrap overflow-hidden"
+                    >
+                      Iniciar Bot
+                    </motion.span>
+                  )}
+                </AnimatePresence>
               </button>
             ) : (
               <button 
                 onClick={handleStopBot}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-rose-600 text-white text-sm font-bold hover:bg-rose-500 transition-colors"
+                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-rose-600 text-white text-sm font-bold hover:bg-rose-500 transition-colors ${isSidebarCollapsed ? 'px-0' : ''}`}
+                title={isSidebarCollapsed ? "Detener Bot" : undefined}
               >
-                <Square size={16} fill="currentColor" /> Detener Bot
+                <Square size={16} fill="currentColor" className="shrink-0" /> 
+                <AnimatePresence>
+                  {!isSidebarCollapsed && (
+                    <motion.span
+                      initial={{ opacity: 0, width: 0 }}
+                      animate={{ opacity: 1, width: 'auto' }}
+                      exit={{ opacity: 0, width: 0 }}
+                      className="whitespace-nowrap overflow-hidden"
+                    >
+                      Detener Bot
+                    </motion.span>
+                  )}
+                </AnimatePresence>
               </button>
             )}
           </div>
         </div>
-      </div>
+      </motion.div>
 
       {/* Main Content */}
-      <div className="pl-64 min-h-screen">
+      <motion.div 
+        animate={{ paddingLeft: isSidebarCollapsed ? '80px' : '256px' }}
+        transition={{ duration: 0.3, ease: "easeInOut" }}
+        className="min-h-screen"
+      >
         <header className="h-20 border-b border-zinc-900 flex items-center justify-between px-8 bg-black/50 backdrop-blur-md sticky top-0 z-40">
           <div>
             <h2 className="text-xl font-bold text-zinc-100 capitalize">{activeTab}</h2>
             <p className="text-xs text-zinc-500">{status?.version || 'v8.0.0'}</p>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 mr-4">
-              {status?.status === 'stopped' || status?.status === 'error' ? (
-                <button 
-                  onClick={handleStartBot}
-                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-500 text-xs font-bold hover:bg-emerald-600/30 transition-all border border-emerald-500/20"
-                >
-                  <Play size={14} fill="currentColor" /> INICIAR
-                </button>
-              ) : (
-                <button 
-                  onClick={handleStopBot}
-                  className="flex items-center gap-2 px-4 py-1.5 rounded-lg bg-rose-600/20 text-rose-500 text-xs font-bold hover:bg-rose-600/30 transition-all border border-rose-500/20"
-                >
-                  <Square size={14} fill="currentColor" /> DETENER
-                </button>
-              )}
-            </div>
             <div className="flex flex-col items-end">
               <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Correos Hoy</span>
               <span className="text-sm font-mono font-bold text-zinc-200">{config?.emailsSentToday || 0} / {config?.emailDailyLimit || 100}</span>
             </div>
-            <div className="w-px h-8 bg-zinc-800 mx-2" />
-            <button className="p-2 text-zinc-500 hover:text-zinc-100 transition-colors">
-              <RefreshCw size={20} onClick={() => window.location.reload()} />
-            </button>
           </div>
         </header>
 
@@ -528,103 +636,107 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
-                {/* Prominent Start Bot Button if stopped */}
-                {status?.status === 'stopped' && (
-                  <motion.div 
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="p-8 bg-emerald-600/10 border border-emerald-500/20 rounded-2xl flex flex-col items-center justify-center text-center space-y-4"
-                  >
-                    <div className="w-16 h-16 bg-emerald-600 rounded-full flex items-center justify-center text-white shadow-lg shadow-emerald-600/20">
-                      <Play size={32} fill="currentColor" />
-                    </div>
-                    <div>
-                      <h3 className="text-xl font-bold text-zinc-100">El Bot está Detenido</h3>
-                      <p className="text-sm text-zinc-400 max-w-md mx-auto">Inicia el bot para comenzar a procesar mensajes y generar reportes automáticos.</p>
-                    </div>
-                    <button 
-                      onClick={handleStartBot}
-                      className="px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold text-lg hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-600/30 active:scale-95"
-                    >
-                      Iniciar Bot Ahora
-                    </button>
-                  </motion.div>
-                )}
-
                 {/* Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <StatCard label="PDFs Procesados" value={status?.stats.processedPdfs || 0} icon={FileText} colorClass="bg-blue-500" />
-                  <StatCard label="Correos Enviados" value={status?.stats.emailsSent || 0} icon={Mail} colorClass="bg-emerald-500" />
-                  <StatCard label="Errores Detectados" value={status?.stats.errorsDetected || 0} icon={AlertTriangle} colorClass="bg-rose-500" />
+                  <StatCard 
+                    label="Archivos Procesados" 
+                    value={status?.stats.processedPdfs || 0} 
+                    icon={FileText} 
+                    colorClass="bg-blue-500"
+                    isExpanded={expandedStats}
+                    onToggle={() => setExpandedStats(!expandedStats)}
+                  >
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Plataforma</span>
+                        <span className="text-sm font-medium text-zinc-200">{status?.system?.platform || 'WhatsApp Web JS'} ({status?.system?.arch || 'x64'})</span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Memoria</span>
+                        <span className="text-sm font-medium text-zinc-200">
+                          {status?.system ? `${Math.round((status.system.totalMem - status.system.freeMem) / 1024 / 1024)}MB / ${Math.round(status.system.totalMem / 1024 / 1024)}MB` : 'LocalAuth (Persistente)'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Uptime</span>
+                        <span className="text-sm font-medium text-zinc-200">
+                          {status?.system ? `${Math.floor(status.system.uptime / 3600)}h ${Math.floor((status.system.uptime % 3600) / 60)}m` : 'America/Mexico_City'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center py-2">
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Carga CPU</span>
+                        <span className="text-sm font-medium text-zinc-200">
+                          {status?.system?.cpuLoad ? status.system.cpuLoad[0].toFixed(2) : 'Invisible (Headless)'}
+                        </span>
+                      </div>
+                    </div>
+                  </StatCard>
+                  <StatCard 
+                    label="Correos Enviados" 
+                    value={status?.stats.emailsSent || 0} 
+                    icon={Mail} 
+                    colorClass="bg-emerald-500"
+                    isExpanded={expandedStats}
+                    onToggle={() => setExpandedStats(!expandedStats)}
+                  >
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Estado Agrupación</span>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${config?.emailBatchingEnabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
+                          {config?.emailBatchingEnabled ? 'ACTIVO' : 'INACTIVO'}
+                        </span>
+                      </div>
+                      {config?.emailBatchingEnabled && (
+                        <div className="space-y-2">
+                          <p className="text-xs text-zinc-400">Próximos envíos programados:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {(config.emailSchedules || []).filter(Boolean).map((t, i) => (
+                              <span key={i} className="px-2 py-1 bg-zinc-800 rounded text-xs font-mono text-zinc-200">{t}</span>
+                            ))}
+                            {(config.emailSchedules || []).filter(Boolean).length === 0 && (
+                              <span className="text-[10px] text-zinc-600 italic">No programado</span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-zinc-500 italic mt-2">O al alcanzar {config.emailBatchLimit || 20} correos en cola.</p>
+                        </div>
+                      )}
+                    </div>
+                  </StatCard>
+                  <StatCard 
+                    label="Errores Detectados" 
+                    value={status?.stats.errorsDetected || 0} 
+                    icon={AlertTriangle} 
+                    colorClass="bg-rose-500"
+                    isExpanded={expandedStats}
+                    onToggle={() => setExpandedStats(!expandedStats)}
+                  >
+                    <div className="space-y-2">
+                      <p className="text-xs text-zinc-400">Últimos errores registrados en la consola de eventos o en la pestaña de auditoría.</p>
+                      <button 
+                        onClick={() => setActiveTab('audit')}
+                        className="text-xs text-rose-400 hover:text-rose-300 underline"
+                      >
+                        Ver registro de auditoría
+                      </button>
+                    </div>
+                  </StatCard>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   {/* Left Column: QR or Info */}
                   <div className="lg:col-span-1 space-y-8">
-                    {status?.status === 'awaiting_qr' && status.qrCode ? (
+                    {status?.status === 'awaiting_qr' && status.qrCode && (
                       <Card title="Escanear QR" icon={RefreshCw}>
                         <div className="flex flex-col items-center justify-center p-4 bg-white rounded-lg">
                           <img src={status.qrCode} alt="WhatsApp QR" className="w-full max-w-[250px]" />
                           <p className="mt-4 text-xs text-zinc-900 font-bold text-center">Escanea este código con tu WhatsApp para conectar el bot.</p>
                         </div>
                       </Card>
-                    ) : (
-                      <Card title="Información del Sistema" icon={Info}>
-                        <div className="space-y-4">
-                          <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
-                            <span className="text-xs text-zinc-500 uppercase font-bold">Plataforma</span>
-                            <span className="text-sm font-medium text-zinc-200">{status?.system?.platform || 'WhatsApp Web JS'} ({status?.system?.arch || 'x64'})</span>
-                          </div>
-                          <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
-                            <span className="text-xs text-zinc-500 uppercase font-bold">Memoria</span>
-                            <span className="text-sm font-medium text-zinc-200">
-                              {status?.system ? `${Math.round((status.system.totalMem - status.system.freeMem) / 1024 / 1024)}MB / ${Math.round(status.system.totalMem / 1024 / 1024)}MB` : 'LocalAuth (Persistente)'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
-                            <span className="text-xs text-zinc-500 uppercase font-bold">Uptime</span>
-                            <span className="text-sm font-medium text-zinc-200">
-                              {status?.system ? `${Math.floor(status.system.uptime / 3600)}h ${Math.floor((status.system.uptime % 3600) / 60)}m` : 'America/Mexico_City'}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center py-2">
-                            <span className="text-xs text-zinc-500 uppercase font-bold">Carga CPU</span>
-                            <span className="text-sm font-medium text-zinc-200">
-                              {status?.system?.cpuLoad ? status.system.cpuLoad[0].toFixed(2) : 'Invisible (Headless)'}
-                            </span>
-                          </div>
-                        </div>
-                      </Card>
                     )}
-
-                    <Card title="Agrupación de Correos" icon={Clock}>
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-zinc-500 uppercase font-bold">Estado</span>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${config?.emailBatchingEnabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
-                            {config?.emailBatchingEnabled ? 'ACTIVO' : 'INACTIVO'}
-                          </span>
-                        </div>
-                        {config?.emailBatchingEnabled && (
-                          <div className="space-y-2">
-                            <p className="text-xs text-zinc-400">Próximos envíos programados:</p>
-                            <div className="flex flex-wrap gap-2">
-                              {(config.emailSchedules || []).filter(Boolean).map((t, i) => (
-                                <span key={i} className="px-2 py-1 bg-zinc-800 rounded text-xs font-mono text-zinc-200">{t}</span>
-                              ))}
-                              {(config.emailSchedules || []).filter(Boolean).length === 0 && (
-                                <span className="text-[10px] text-zinc-600 italic">No programado</span>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-zinc-500 italic mt-2">O al alcanzar {config.emailBatchLimit || 20} correos en cola.</p>
-                          </div>
-                        )}
-                      </div>
-                    </Card>
                   </div>
 
                   {/* Right Column: Logs */}
-                  <div className="lg:col-span-2">
+                  <div className={status?.status === 'awaiting_qr' && status.qrCode ? "lg:col-span-2" : "lg:col-span-3"}>
                     <Card title="Consola de Eventos" icon={Database} className="h-full flex flex-col">
                       <div className="flex-1 overflow-y-auto min-h-[600px] max-h-[1000px] font-mono text-[11px] space-y-1 pr-2 custom-scrollbar">
                         {logs.length === 0 ? (
@@ -848,7 +960,7 @@ export default function App() {
                             </div>
                             <div>
                               <h4 className="font-bold text-zinc-100">{chat.targetContact}</h4>
-                              <p className="text-xs text-zinc-500">{chat.emailDestino || 'Sin email destino'}</p>
+                              <p className="text-xs text-zinc-500">{chat.rules?.length || 0} Reglas configuradas</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
@@ -870,8 +982,9 @@ export default function App() {
                               exit={{ height: 0, opacity: 0 }}
                               className="overflow-hidden"
                             >
-                              <div className="px-6 pb-6 pt-2 border-t border-zinc-800 grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-4">
+                              <div className="px-6 pb-6 pt-2 border-t border-zinc-800 space-y-6">
+                                {/* Chat Global Settings */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
                                   <div className="space-y-1.5">
                                     <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Nombre del Chat / Grupo</label>
                                     <input 
@@ -882,127 +995,223 @@ export default function App() {
                                     />
                                   </div>
                                   <div className="space-y-1.5">
-                                    <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Email Destino (Principal)</label>
-                                    <input 
-                                      type="text" 
-                                      value={chat.emailDestino} 
-                                      onChange={e => updateChatConfig(chat.id, 'emailDestino', e.target.value)}
+                                    <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Dirección Mensajes</label>
+                                    <select 
+                                      value={chat.messageDirection} 
+                                      onChange={e => updateChatConfig(chat.id, 'messageDirection', e.target.value as any)}
                                       className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
-                                    />
+                                    >
+                                      <option value="both">Ambos (Entrantes y Salientes)</option>
+                                      <option value="received">Solo Recibidos</option>
+                                      <option value="sent">Solo Enviados</option>
+                                    </select>
                                   </div>
                                   <div className="space-y-1.5">
-                                    <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Email BCC (Oculto)</label>
+                                    <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Modo de Procesamiento</label>
+                                    <select 
+                                      value={chat.processingMode} 
+                                      onChange={e => updateChatConfig(chat.id, 'processingMode', e.target.value as any)}
+                                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                                    >
+                                      <option value="simple">Simple (Una regla por mensaje)</option>
+                                      <option value="exhaustive">Exhaustivo (Múltiples reglas por mensaje)</option>
+                                    </select>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Email BCC (Copia Oculta Global)</label>
                                     <input 
                                       type="text" 
+                                      placeholder="Ej: admin@empresa.com"
                                       value={chat.emailBcc || ''} 
                                       onChange={e => updateChatConfig(chat.id, 'emailBcc', e.target.value)}
                                       className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                                     />
                                   </div>
-                                  <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-1.5">
-                                      <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Trigger Error</label>
-                                      <input 
-                                        type="text" 
-                                        value={chat.triggerError} 
-                                        onChange={e => updateChatConfig(chat.id, 'triggerError', e.target.value)}
-                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all font-mono"
-                                      />
-                                    </div>
-                                    <div className="space-y-1.5">
-                                      <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Dirección Mensajes</label>
-                                      <select 
-                                        value={chat.messageDirection || 'both'} 
-                                        onChange={e => updateChatConfig(chat.id, 'messageDirection', e.target.value)}
-                                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
-                                      >
-                                        <option value="both">Ambos</option>
-                                        <option value="received">Solo Recibidos</option>
-                                        <option value="sent">Solo Enviados</option>
-                                      </select>
-                                    </div>
-                                  </div>
                                 </div>
 
-                                <div className="space-y-6">
-                                  {/* PDF Actions */}
-                                  <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl space-y-3">
-                                    <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-                                      <span className="text-xs font-bold text-zinc-100 uppercase tracking-wider">Acciones PDF / Éxito</span>
-                                      <div className="flex gap-4">
-                                        <label className="flex items-center gap-2 text-[10px] font-bold text-zinc-500">
-                                          EMAIL
-                                          <input type="checkbox" checked={chat.pdfActionEmailEnabled} onChange={e => updateChatConfig(chat.id, 'pdfActionEmailEnabled', e.target.checked)} />
-                                        </label>
-                                        <label className="flex items-center gap-2 text-[10px] font-bold text-zinc-500">
-                                          WA
-                                          <input type="checkbox" checked={chat.pdfActionWaEnabled} onChange={e => updateChatConfig(chat.id, 'pdfActionWaEnabled', e.target.checked)} />
-                                        </label>
-                                      </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                      <input 
-                                        type="text" 
-                                        placeholder="Asunto Email"
-                                        value={chat.actionPdfSubject} 
-                                        onChange={e => updateChatConfig(chat.id, 'actionPdfSubject', e.target.value)}
-                                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none"
-                                      />
-                                      <textarea 
-                                        placeholder="Cuerpo Email"
-                                        value={chat.actionPdfBody} 
-                                        onChange={e => updateChatConfig(chat.id, 'actionPdfBody', e.target.value)}
-                                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none h-16 resize-none"
-                                      />
-                                    </div>
+                                {/* Rules List */}
+                                <div className="space-y-4">
+                                  <div className="flex items-center justify-between">
+                                    <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Reglas de Automatización</h5>
+                                    <button 
+                                      onClick={() => addRule(chat.id)}
+                                      className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 text-zinc-300 rounded-lg text-[10px] font-bold hover:bg-zinc-700 transition-all"
+                                    >
+                                      <Plus size={12} /> Añadir Regla
+                                    </button>
                                   </div>
 
-                                  {/* Error Actions */}
-                                  <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl space-y-3">
-                                    <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-                                      <span className="text-xs font-bold text-zinc-100 uppercase tracking-wider">Acciones Errores (NSS/CURP)</span>
-                                      <div className="flex gap-4">
-                                        <label className="flex items-center gap-2 text-[10px] font-bold text-zinc-500">
-                                          EMAIL
-                                          <input type="checkbox" checked={chat.nssActionEmailEnabled} onChange={e => updateChatConfig(chat.id, 'nssActionEmailEnabled', e.target.checked)} />
-                                        </label>
-                                        <label className="flex items-center gap-2 text-[10px] font-bold text-zinc-500">
-                                          WA
-                                          <input type="checkbox" checked={chat.nssActionWaEnabled} onChange={e => updateChatConfig(chat.id, 'nssActionWaEnabled', e.target.checked)} />
-                                        </label>
+                                  <div className="space-y-3">
+                                    {(chat.rules || []).map((rule) => (
+                                      <div key={rule.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-4">
+                                        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                                          <div className="flex items-center gap-3">
+                                            <Zap size={16} className="text-amber-500" />
+                                            <input 
+                                              type="text" 
+                                              value={rule.name} 
+                                              onChange={e => updateRule(chat.id, rule.id, 'name', e.target.value)}
+                                              className="bg-transparent border-none outline-none text-sm font-bold text-zinc-100 focus:ring-0 p-0 w-48"
+                                            />
+                                          </div>
+                                          <button 
+                                            onClick={() => removeRule(chat.id, rule.id)}
+                                            className="p-1.5 text-zinc-600 hover:text-rose-500 transition-colors"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                          {/* Trigger Section */}
+                                          <div className="space-y-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                              <Search size={14} className="text-zinc-500" />
+                                              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Disparador (Trigger)</span>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                              <div className="space-y-1">
+                                                <label className="text-[9px] text-zinc-600 uppercase font-bold">Tipo</label>
+                                                <select 
+                                                  value={rule.type} 
+                                                  onChange={e => updateRule(chat.id, rule.id, 'type', e.target.value as any)}
+                                                  className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none"
+                                                >
+                                                  <option value="text">Texto</option>
+                                                  <option value="file">Archivo / Adjunto</option>
+                                                </select>
+                                              </div>
+                                              <div className="space-y-1">
+                                                <label className="text-[9px] text-zinc-600 uppercase font-bold">Subtipo</label>
+                                                <select 
+                                                  value={rule.subtype} 
+                                                  onChange={e => updateRule(chat.id, rule.id, 'subtype', e.target.value)}
+                                                  className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none"
+                                                >
+                                                  {rule.type === 'text' ? (
+                                                    <>
+                                                      <option value="contains">Contiene</option>
+                                                      <option value="exact">Palabra Exacta</option>
+                                                      <option value="regex">Regex (Avanzado)</option>
+                                                    </>
+                                                  ) : (
+                                                    <>
+                                                      <option value="pdf">PDF</option>
+                                                      <option value="image">Imagen</option>
+                                                      <option value="video">Video</option>
+                                                      <option value="doc">Documento (Word/Excel)</option>
+                                                      <option value="any">Cualquier Archivo</option>
+                                                    </>
+                                                  )}
+                                                </select>
+                                              </div>
+                                            </div>
+                                            <div className="space-y-1">
+                                              <label className="text-[9px] text-zinc-600 uppercase font-bold">Valor a buscar</label>
+                                              <input 
+                                                type="text" 
+                                                placeholder={rule.type === 'text' ? "Ej: ERROR, NSS, etc." : "Ej: .pdf, factura, etc."}
+                                                value={rule.triggerValue} 
+                                                onChange={e => updateRule(chat.id, rule.id, 'triggerValue', e.target.value)}
+                                                className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none font-mono"
+                                              />
+                                            </div>
+                                          </div>
+
+                                          {/* Actions Section */}
+                                          <div className="space-y-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                              <Cpu size={14} className="text-zinc-500" />
+                                              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Acciones</span>
+                                            </div>
+                                            
+                                            {/* Email Action */}
+                                            <div className={`p-3 rounded-lg border transition-all ${rule.emailEnabled ? 'bg-zinc-900/50 border-zinc-700' : 'bg-zinc-900/20 border-zinc-800/50 opacity-60'}`}>
+                                              <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-2">
+                                                  <Mail size={14} className={rule.emailEnabled ? 'text-blue-400' : 'text-zinc-600'} />
+                                                  <span className="text-[10px] font-bold text-zinc-300">EMAIL</span>
+                                                </div>
+                                                <input 
+                                                  type="checkbox" 
+                                                  checked={rule.emailEnabled} 
+                                                  onChange={e => updateRule(chat.id, rule.id, 'emailEnabled', e.target.checked)}
+                                                  className="w-3.5 h-3.5 accent-blue-500"
+                                                />
+                                              </div>
+                                              {rule.emailEnabled && (
+                                                <div className="space-y-2 mt-3 animate-in fade-in slide-in-from-top-1">
+                                                  <input 
+                                                    type="text" 
+                                                    placeholder="Destinatarios (separados por coma)"
+                                                    value={rule.emailTargets} 
+                                                    onChange={e => updateRule(chat.id, rule.id, 'emailTargets', e.target.value)}
+                                                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
+                                                  />
+                                                  <input 
+                                                    type="text" 
+                                                    placeholder="Asunto"
+                                                    value={rule.emailSubject} 
+                                                    onChange={e => updateRule(chat.id, rule.id, 'emailSubject', e.target.value)}
+                                                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
+                                                  />
+                                                  <textarea 
+                                                    placeholder="Cuerpo del mensaje"
+                                                    value={rule.emailBody} 
+                                                    onChange={e => updateRule(chat.id, rule.id, 'emailBody', e.target.value)}
+                                                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none h-12 resize-none"
+                                                  />
+                                                </div>
+                                              )}
+                                            </div>
+
+                                            {/* WhatsApp Action */}
+                                            <div className={`p-3 rounded-lg border transition-all ${rule.waEnabled ? 'bg-zinc-900/50 border-zinc-700' : 'bg-zinc-900/20 border-zinc-800/50 opacity-60'}`}>
+                                              <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-2">
+                                                  <MessageSquare size={14} className={rule.waEnabled ? 'text-emerald-400' : 'text-zinc-600'} />
+                                                  <span className="text-[10px] font-bold text-zinc-300">WHATSAPP</span>
+                                                </div>
+                                                <input 
+                                                  type="checkbox" 
+                                                  checked={rule.waEnabled} 
+                                                  onChange={e => updateRule(chat.id, rule.id, 'waEnabled', e.target.checked)}
+                                                  className="w-3.5 h-3.5 accent-emerald-500"
+                                                />
+                                              </div>
+                                              {rule.waEnabled && (
+                                                <div className="space-y-2 mt-3 animate-in fade-in slide-in-from-top-1">
+                                                  <input 
+                                                    type="text" 
+                                                    placeholder="Números de destino (separados por coma)"
+                                                    value={rule.waTargets} 
+                                                    onChange={e => updateRule(chat.id, rule.id, 'waTargets', e.target.value)}
+                                                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
+                                                  />
+                                                  <textarea 
+                                                    placeholder="Mensaje de WhatsApp"
+                                                    value={rule.waMessage} 
+                                                    onChange={e => updateRule(chat.id, rule.id, 'waMessage', e.target.value)}
+                                                    className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none h-12 resize-none"
+                                                  />
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
                                       </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                      <div className="grid grid-cols-2 gap-2">
-                                        <input 
-                                          type="text" 
-                                          placeholder="Palabras NSS (coma)"
-                                          value={chat.triggerNssWord} 
-                                          onChange={e => updateChatConfig(chat.id, 'triggerNssWord', e.target.value)}
-                                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none"
-                                        />
-                                        <input 
-                                          type="text" 
-                                          placeholder="Palabras CURP (coma)"
-                                          value={chat.triggerCurpWord} 
-                                          onChange={e => updateChatConfig(chat.id, 'triggerCurpWord', e.target.value)}
-                                          className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none"
-                                        />
+                                    ))}
+                                    {(!chat.rules || chat.rules.length === 0) && (
+                                      <div className="py-8 text-center border-2 border-dashed border-zinc-800 rounded-xl">
+                                        <p className="text-xs text-zinc-600 italic">No hay reglas configuradas para este chat.</p>
+                                        <button 
+                                          onClick={() => addRule(chat.id)}
+                                          className="mt-2 text-[10px] font-bold text-zinc-400 hover:text-zinc-200 transition-colors"
+                                        >
+                                          + Añadir primera regla
+                                        </button>
                                       </div>
-                                      <input 
-                                        type="text" 
-                                        placeholder="Asunto Alerta"
-                                        value={chat.actionNssSubject} 
-                                        onChange={e => updateChatConfig(chat.id, 'actionNssSubject', e.target.value)}
-                                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none"
-                                      />
-                                      <textarea 
-                                        placeholder="Cuerpo Alerta"
-                                        value={chat.actionNssBody} 
-                                        onChange={e => updateChatConfig(chat.id, 'actionNssBody', e.target.value)}
-                                        className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-xs outline-none h-16 resize-none"
-                                      />
-                                    </div>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -1615,7 +1824,7 @@ export default function App() {
           </AnimatePresence>
         )}
         </main>
-      </div>
+      </motion.div>
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar {
