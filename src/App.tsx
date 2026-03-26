@@ -303,11 +303,14 @@ export default function App() {
   };
 
   const handleApplyUpdate = async () => {
-    if (!window.confirm("¿Estás seguro de aplicar la actualización? El bot se reiniciará.")) return;
+    if (!window.confirm("¿Estás seguro de aplicar la actualización? El bot descargará los archivos, compilará y se reiniciará. Si estás en Localhost, deberás iniciarlo manualmente después.")) return;
     try {
       const res = await fetch('/api/update/apply', { method: 'POST' });
       if (res.ok) {
-        toast.success("Actualización iniciada. El servidor se reiniciará.");
+        toast.info("Actualización en curso. El servidor se cerrará en unos segundos para aplicar los cambios.", { duration: 10000 });
+        setTimeout(() => {
+          toast.warning("El servidor se está reiniciando. Si la página no carga en 1 minuto, inicia el bot manualmente o usa run.bat.", { duration: 20000 });
+        }, 5000);
       } else {
         toast.error("Error al aplicar actualización.");
       }
@@ -1415,6 +1418,12 @@ export default function App() {
                             >
                               Descargar y Aplicar Actualización
                             </button>
+                            <div className="p-3 bg-blue-500/5 border border-blue-500/10 rounded-lg">
+                              <p className="text-[10px] text-zinc-500 leading-relaxed">
+                                <span className="font-bold text-blue-400 uppercase tracking-wider block mb-1">Nota para Localhost:</span>
+                                Al aplicar la actualización, la aplicación se cerrará para recompilar. Si no usas un gestor de procesos (como PM2) o el script <strong>run.bat</strong>, deberás ejecutar <code>npm run dev</code> manualmente después de que la terminal se cierre.
+                              </p>
+                            </div>
                           </div>
                         )}
                       </div>

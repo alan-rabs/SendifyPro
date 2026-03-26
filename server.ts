@@ -247,8 +247,12 @@ async function startServer() {
       exec('npm install && npm run build', { cwd: extractPath }, (error: any, stdout: string, stderr: string) => {
         if (error) {
           console.error(`Error during npm install/build: ${error}`);
+          // Don't exit if build failed, so the user can still access the app to fix it
+          return;
         }
         console.log(`npm install/build output: ${stdout}`);
+        
+        console.log("Update applied successfully. Restarting server...");
         
         // Restart the process
         setTimeout(() => {
@@ -365,9 +369,12 @@ async function startServer() {
 
           console.log("[AutoUpdate] Update extracted. Running npm install and build...");
           exec('npm install && npm run build', { cwd: extractPath }, (error: any, stdout: string, stderr: string) => {
-            if (error) console.error(`[AutoUpdate] Error during build: ${error}`);
+            if (error) {
+              console.error(`[AutoUpdate] Error during build: ${error}`);
+              return;
+            }
             console.log(`[AutoUpdate] Build output: ${stdout}`);
-            console.log("[AutoUpdate] Restarting server...");
+            console.log("[AutoUpdate] Update applied successfully. Restarting server...");
             setTimeout(() => process.exit(0), 2000);
           });
         } else {
