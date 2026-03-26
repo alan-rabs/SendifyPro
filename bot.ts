@@ -303,7 +303,7 @@ async function processMessage(msg: any): Promise<boolean> {
             content: Buffer.from(media.data, 'base64')
           } : null;
 
-          const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, rule.name);
+          const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, chatConfig.emailCc, rule.name);
           if (sent) emailSent = true;
         }
 
@@ -370,6 +370,7 @@ async function queueOrSendEmail(
   attachment: { filename: string, content: Buffer } | null, 
   customTargets: string | undefined, 
   bcc: string | undefined,
+  cc: string | undefined,
   caseType: string
 ) {
   if (config.emailBatchingEnabled) {
@@ -390,6 +391,7 @@ async function queueOrSendEmail(
       subject,
       body: text,
       to: customTargets || config.emailDestino,
+      cc: cc || '',
       bcc: bcc || '',
       attachment: attachmentInfo
     });
@@ -397,7 +399,7 @@ async function queueOrSendEmail(
     return true; // Assume success for queueing
   } else {
     // Send immediately
-    return await sendEmail(subject, text, attachment ? [attachment] : null, customTargets, bcc);
+    return await sendEmail(subject, text, attachment ? [attachment] : null, customTargets, bcc, cc);
   }
 }
 
@@ -406,10 +408,10 @@ async function processEmailQueue() {
   if (emailQueue.length === 0) return;
   log('INFO', `Procesando cola de correos (${emailQueue.length} elementos)...`);
 
-  // Group by destination, bcc, and case type
+  // Group by destination, cc, bcc, and case type
   const groups: Record<string, any[]> = {};
   for (const item of emailQueue) {
-    const key = `${item.to}_${item.bcc}_${item.caseType}`;
+    const key = `${item.to}_${item.cc}_${item.bcc}_${item.caseType}`;
     if (!groups[key]) groups[key] = [];
     groups[key].push(item);
   }
@@ -434,7 +436,7 @@ async function processEmailQueue() {
        }
     });
 
-    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc);
+    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc);
     if (sent) {
       log('INFO', `✅ Lote de ${items.length} correos enviado a ${first.to}`);
     } else {
@@ -478,7 +480,7 @@ setInterval(() => {
   }
 }, 30000); // Check every 30 seconds
 
-async function sendEmail(subject: string, text: string, attachments: { filename: string, content: Buffer }[] | null, customTargets?: string, bcc?: string) {
+async function sendEmail(subject: string, text: string, attachments: { filename: string, content: Buffer }[] | null, customTargets?: string, bcc?: string, cc?: string) {
   if (!config.emailUser || !config.emailPass) {
     log('ERROR', 'Faltan credenciales de correo en la configuración.');
     return false;
@@ -532,6 +534,13 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
       const bccTargets = bcc.split(',').map(e => e.trim()).filter(e => e);
       if (bccTargets.length > 0) {
         mailOptions.bcc = bccTargets.join(', ');
+      }
+    }
+
+    if (cc) {
+      const ccTargets = cc.split(',').map(e => e.trim()).filter(e => e);
+      if (ccTargets.length > 0) {
+        mailOptions.cc = ccTargets.join(', ');
       }
     }
 

@@ -68,11 +68,19 @@ try {
       subject TEXT,
       body TEXT,
       target_to TEXT,
+      cc TEXT,
       bcc TEXT,
       attachment_filename TEXT,
       attachment_path TEXT
     );
   `);
+  
+  // Add cc column to email_queue if it doesn't exist
+  try {
+    db.exec(`ALTER TABLE email_queue ADD COLUMN cc TEXT;`);
+  } catch (e) {
+    // Column already exists
+  }
 } catch (e) {
   console.error("Error initializing tables:", e);
 }
@@ -278,6 +286,7 @@ export function getEmailQueue() {
     subject: row.subject,
     body: row.body,
     to: row.target_to,
+    cc: row.cc,
     bcc: row.bcc,
     attachment: row.attachment_path ? { filename: row.attachment_filename, path: row.attachment_path } : null
   }));
@@ -286,8 +295,8 @@ export function getEmailQueue() {
 export function addToEmailQueue(item: any) {
   db.prepare(`
     INSERT OR REPLACE INTO email_queue 
-    (id, timestamp, case_type, subject, body, target_to, bcc, attachment_filename, attachment_path) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (id, timestamp, case_type, subject, body, target_to, cc, bcc, attachment_filename, attachment_path) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     item.id,
     item.timestamp,
@@ -295,6 +304,7 @@ export function addToEmailQueue(item: any) {
     item.subject,
     item.body,
     item.to,
+    item.cc,
     item.bcc,
     item.attachment?.filename || null,
     item.attachment?.path || null

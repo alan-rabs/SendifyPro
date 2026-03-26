@@ -87,6 +87,7 @@ interface ChatConfig {
   processingMode: 'simple' | 'exhaustive';
   rules: AutomationRule[];
   emailBcc?: string;
+  emailCc?: string;
 }
 
 interface AuditTemplate {
@@ -355,6 +356,7 @@ export default function App() {
       messageDirection: 'both',
       processingMode: 'simple',
       rules: [],
+      emailCc: '',
       emailBcc: ''
     };
     setConfig({ ...config, chatConfigs: [...config.chatConfigs, newChat] });
@@ -984,7 +986,7 @@ export default function App() {
                             >
                               <div className="px-6 pb-6 pt-2 border-t border-zinc-800 space-y-6">
                                 {/* Chat Global Settings */}
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-4">
                                   <div className="space-y-1.5">
                                     <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Nombre del Chat / Grupo</label>
                                     <input 
@@ -1016,6 +1018,16 @@ export default function App() {
                                       <option value="simple">Simple (Una regla por mensaje)</option>
                                       <option value="exhaustive">Exhaustivo (Múltiples reglas por mensaje)</option>
                                     </select>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Email CC (Copia Global)</label>
+                                    <input 
+                                      type="text" 
+                                      placeholder="Ej: equipo@empresa.com"
+                                      value={chat.emailCc || ''} 
+                                      onChange={e => updateChatConfig(chat.id, 'emailCc', e.target.value)}
+                                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                                    />
                                   </div>
                                   <div className="space-y-1.5">
                                     <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Email BCC (Copia Oculta Global)</label>
@@ -1766,10 +1778,16 @@ export default function App() {
                     <div className="space-y-3 max-h-[200px] overflow-y-auto pr-2 custom-scrollbar">
                       <div className="p-2 bg-zinc-950 border border-zinc-900 rounded-lg">
                         <div className="flex justify-between items-center mb-1">
-                          <span className="text-[10px] font-bold text-zinc-100">v8.6.0</span>
+                          <span className="text-[10px] font-bold text-zinc-100">v8.7.0</span>
                           <span className="text-[9px] text-zinc-600 uppercase">Actual</span>
                         </div>
-                        <p className="text-[10px] text-zinc-500">Fase 6: Rediseño de Dashboard, Sidebar Colapsable y Tarjetas Expandibles.</p>
+                        <p className="text-[10px] text-zinc-500">Fase 7: Soporte para campo CC (Copia Global) en configuración de correos.</p>
+                      </div>
+                      <div className="p-2 bg-zinc-950/50 border border-zinc-900/50 rounded-lg">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[10px] font-bold text-zinc-400">v8.6.0</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-600">Fase 6: Rediseño de Dashboard, Sidebar Colapsable y Tarjetas Expandibles.</p>
                       </div>
                       <div className="p-2 bg-zinc-950/50 border border-zinc-900/50 rounded-lg">
                         <div className="flex justify-between items-center mb-1">
