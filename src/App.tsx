@@ -116,9 +116,7 @@ interface Config {
   lastEmailDate?: string;
   emailBatchingEnabled?: boolean;
   emailBatchLimit?: number;
-  emailSchedule1?: string;
-  emailSchedule2?: string;
-  emailSchedule3?: string;
+  emailSchedules?: string[];
   auditActionEmailEnabled: boolean;
   auditEmailTargets: string;
   auditActionWaEnabled: boolean;
@@ -206,8 +204,8 @@ export default function App() {
   }, []);
 
   const fetchConfig = useCallback(async (force = false) => {
-    // Si estamos en la pestaña de configuración, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
-    if (activeTab === 'settings' && !force) return;
+    // Si estamos en la pestaña de configuración o actualización, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
+    if ((activeTab === 'settings' || activeTab === 'update') && !force) return;
     
     try {
       const res = await fetch('/api/settings');
@@ -225,9 +223,15 @@ export default function App() {
     try {
       const res = await fetch('/api/audit/list');
       const data = await res.json();
-      setAuditLogs(data);
+      if (Array.isArray(data)) {
+        setAuditLogs(data);
+      } else {
+        console.error("Audit logs API returned non-array data", data);
+        setAuditLogs([]);
+      }
     } catch (e) {
       console.error("Error fetching audit logs", e);
+      setAuditLogs([]);
     }
   }, []);
 
@@ -602,9 +606,12 @@ export default function App() {
                           <div className="space-y-2">
                             <p className="text-xs text-zinc-400">Próximos envíos programados:</p>
                             <div className="flex flex-wrap gap-2">
-                              {[config.emailSchedule1, config.emailSchedule2, config.emailSchedule3].filter(Boolean).map((t, i) => (
+                              {(config.emailSchedules || []).filter(Boolean).map((t, i) => (
                                 <span key={i} className="px-2 py-1 bg-zinc-800 rounded text-xs font-mono text-zinc-200">{t}</span>
                               ))}
+                              {(config.emailSchedules || []).filter(Boolean).length === 0 && (
+                                <span className="text-[10px] text-zinc-600 italic">No programado</span>
+                              )}
                             </div>
                             <p className="text-[10px] text-zinc-500 italic mt-2">O al alcanzar {config.emailBatchLimit || 20} correos en cola.</p>
                           </div>
@@ -676,8 +683,11 @@ export default function App() {
                           <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Puerto</label>
                           <input 
                             type="number" 
-                            value={config.smtpPort} 
-                            onChange={e => setConfig({...config, smtpPort: parseInt(e.target.value)})}
+                            value={config.smtpPort === undefined ? '' : config.smtpPort} 
+                            onChange={e => {
+                              const val = e.target.value === '' ? undefined : parseInt(e.target.value);
+                              setConfig({...config, smtpPort: val});
+                            }}
                             className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                           />
                         </div>
@@ -706,8 +716,11 @@ export default function App() {
                         <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Límite Diario</label>
                         <input 
                           type="number" 
-                          value={config.emailDailyLimit || 100} 
-                          onChange={e => setConfig({...config, emailDailyLimit: parseInt(e.target.value)})}
+                          value={config.emailDailyLimit === undefined ? 100 : config.emailDailyLimit} 
+                          onChange={e => {
+                            const val = e.target.value === '' ? undefined : parseInt(e.target.value);
+                            setConfig({...config, emailDailyLimit: val});
+                          }}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                         />
                       </div>
@@ -733,41 +746,76 @@ export default function App() {
                         <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Límite de elementos por lote</label>
                         <input 
                           type="number" 
-                          value={config.emailBatchLimit || 20} 
-                          onChange={e => setConfig({...config, emailBatchLimit: parseInt(e.target.value)})}
+                          value={config.emailBatchLimit === undefined ? 20 : config.emailBatchLimit} 
+                          onChange={e => {
+                            const val = e.target.value === '' ? undefined : parseInt(e.target.value);
+                            setConfig({...config, emailBatchLimit: val});
+                          }}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
                           disabled={!config.emailBatchingEnabled}
                         />
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Horarios de envío (HH:MM)</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          <input 
-                            type="text" 
-                            placeholder="09:00"
-                            value={config.emailSchedule1 || ''} 
-                            onChange={e => setConfig({...config, emailSchedule1: e.target.value})}
-                            className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
-                            disabled={!config.emailBatchingEnabled}
-                          />
-                          <input 
-                            type="text" 
-                            placeholder="15:00"
-                            value={config.emailSchedule2 || ''} 
-                            onChange={e => setConfig({...config, emailSchedule2: e.target.value})}
-                            className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
-                            disabled={!config.emailBatchingEnabled}
-                          />
-                          <input 
-                            type="text" 
-                            placeholder="21:00"
-                            value={config.emailSchedule3 || ''} 
-                            onChange={e => setConfig({...config, emailSchedule3: e.target.value})}
-                            className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
-                            disabled={!config.emailBatchingEnabled}
-                          />
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Horarios de envío (HH:MM)</label>
+                          {(config.emailSchedules?.length || 0) < 5 && (
+                            <button 
+                              onClick={() => {
+                                const current = config.emailSchedules || [];
+                                setConfig({...config, emailSchedules: [...current, '']});
+                              }}
+                              disabled={!config.emailBatchingEnabled}
+                              className="text-[10px] text-zinc-400 hover:text-zinc-100 flex items-center gap-1 transition-colors disabled:opacity-50"
+                            >
+                              <Plus size={10} /> Añadir Horario
+                            </button>
+                          )}
                         </div>
+                        <div className="grid grid-cols-1 gap-2">
+                          {(config.emailSchedules || []).map((schedule, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <input 
+                                type="text" 
+                                placeholder="09:00"
+                                value={schedule} 
+                                onChange={e => {
+                                  const newSchedules = [...(config.emailSchedules || [])];
+                                  newSchedules[idx] = e.target.value;
+                                  setConfig({...config, emailSchedules: newSchedules});
+                                }}
+                                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
+                                disabled={!config.emailBatchingEnabled}
+                              />
+                              <button 
+                                onClick={() => {
+                                  const newSchedules = (config.emailSchedules || []).filter((_, i) => i !== idx);
+                                  setConfig({...config, emailSchedules: newSchedules});
+                                }}
+                                disabled={!config.emailBatchingEnabled}
+                                className="p-2 text-zinc-600 hover:text-rose-500 transition-colors disabled:opacity-50"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          ))}
+                          {(config.emailSchedules?.length || 0) === 0 && (
+                            <p className="text-[10px] text-zinc-600 italic">No hay horarios configurados. Se enviará solo por límite de lote.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 p-3 bg-blue-500/5 border border-blue-500/10 rounded-lg space-y-2">
+                        <div className="flex items-center gap-2 text-blue-400">
+                          <Info size={14} />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Información de Agrupación</span>
+                        </div>
+                        <p className="text-[11px] text-zinc-400 leading-relaxed">
+                          El sistema realiza un <strong>"corte"</strong> automático al alcanzar cualquiera de los horarios programados, enviando todos los elementos acumulados hasta ese momento (aunque no se haya llegado al límite del lote). 
+                        </p>
+                        <p className="text-[11px] text-zinc-400 leading-relaxed">
+                          Los envíos se agrupan de forma inteligente por <strong>Caso y Destinatario</strong>, asegurando que cada chat configurado reciba su propio resumen organizado.
+                        </p>
                       </div>
                     </div>
                   </Card>

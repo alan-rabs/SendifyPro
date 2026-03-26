@@ -555,7 +555,7 @@ setInterval(() => {
   const now = new Date();
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
   
-  const schedules = [config.emailSchedule1, config.emailSchedule2, config.emailSchedule3].filter(Boolean);
+  const schedules = config.emailSchedules || [];
   const limit = config.emailBatchLimit || 20;
 
   let shouldRun = false;
