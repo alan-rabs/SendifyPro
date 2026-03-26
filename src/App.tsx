@@ -205,7 +205,10 @@ export default function App() {
     }
   }, []);
 
-  const fetchConfig = useCallback(async () => {
+  const fetchConfig = useCallback(async (force = false) => {
+    // Si estamos en la pestaña de configuración, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
+    if (activeTab === 'settings' && !force) return;
+    
     try {
       const res = await fetch('/api/settings');
       if (!res.ok) throw new Error(`Settings API: ${res.status}`);
@@ -216,7 +219,7 @@ export default function App() {
       console.error("Error fetching config", e);
       setError(prev => prev ? `${prev} | ${e.message}` : e.message);
     }
-  }, []);
+  }, [activeTab]);
 
   const fetchAuditLogs = useCallback(async () => {
     try {
@@ -241,18 +244,18 @@ export default function App() {
   useEffect(() => {
     fetchStatus();
     fetchLogs();
-    fetchConfig();
+    fetchConfig(true); // Forzamos la carga inicial al entrar a cualquier pestaña
     fetchAuditLogs();
 
     const interval = setInterval(() => {
       fetchStatus();
       fetchLogs();
-      fetchConfig();
+      fetchConfig(); // El callback ya maneja la lógica de no sobrescribir en settings
       fetchAuditLogs();
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [fetchStatus, fetchLogs, fetchConfig, fetchAuditLogs]);
+  }, [fetchStatus, fetchLogs, fetchConfig, fetchAuditLogs, activeTab]);
 
   const handleStartBot = async () => {
     try {
@@ -685,6 +688,7 @@ export default function App() {
                           type="email" 
                           value={config.emailUser} 
                           onChange={e => setConfig({...config, emailUser: e.target.value})}
+                          autoComplete="off"
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                         />
                       </div>
@@ -694,6 +698,7 @@ export default function App() {
                           type="password" 
                           value={config.emailPass} 
                           onChange={e => setConfig({...config, emailPass: e.target.value})}
+                          autoComplete="new-password"
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                         />
                       </div>
