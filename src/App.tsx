@@ -1766,10 +1766,16 @@ export default function App() {
                     <div className="space-y-3 max-h-[200px] overflow-y-auto pr-2 custom-scrollbar">
                       <div className="p-2 bg-zinc-950 border border-zinc-900 rounded-lg">
                         <div className="flex justify-between items-center mb-1">
-                          <span className="text-[10px] font-bold text-zinc-100">v8.5.0</span>
+                          <span className="text-[10px] font-bold text-zinc-100">v8.6.0</span>
                           <span className="text-[9px] text-zinc-600 uppercase">Actual</span>
                         </div>
-                        <p className="text-[10px] text-zinc-500">Fase 5: Guía de Ayuda, Documentación y Versionado Inteligente.</p>
+                        <p className="text-[10px] text-zinc-500">Fase 6: Rediseño de Dashboard, Sidebar Colapsable y Tarjetas Expandibles.</p>
+                      </div>
+                      <div className="p-2 bg-zinc-950/50 border border-zinc-900/50 rounded-lg">
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-[10px] font-bold text-zinc-400">v8.5.0</span>
+                        </div>
+                        <p className="text-[10px] text-zinc-600">Fase 5: Guía de Ayuda, Documentación y Versionado Inteligente.</p>
                       </div>
                       <div className="p-2 bg-zinc-950/50 border border-zinc-900/50 rounded-lg">
                         <div className="flex justify-between items-center mb-1">
