@@ -830,12 +830,13 @@ export default function App() {
                         </div>
                       </div>
                       <div className="space-y-1.5">
-                        <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Usuario / Email</label>
+                        <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Correo Remitente (El que envía)</label>
                         <input 
                           type="email" 
                           value={config.emailUser} 
                           onChange={e => setConfig({...config, emailUser: e.target.value})}
                           autoComplete="off"
+                          placeholder="bot@tuempresa.com"
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                         />
                       </div>
@@ -846,8 +847,10 @@ export default function App() {
                           value={config.emailPass} 
                           onChange={e => setConfig({...config, emailPass: e.target.value})}
                           autoComplete="new-password"
+                          placeholder="••••••••••••••••"
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
                         />
+                        <p className="text-[10px] text-zinc-500 mt-1">Usa una contraseña de aplicación si usas Gmail o Microsoft 365.</p>
                       </div>
                       <div className="space-y-1.5">
                         <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Límite Diario</label>
@@ -1175,7 +1178,7 @@ export default function App() {
                                                 <div className="space-y-2 mt-3 animate-in fade-in slide-in-from-top-1">
                                                   <input 
                                                     type="text" 
-                                                    placeholder="Destinatarios (separados por coma)"
+                                                    placeholder="Destinatarios a notificar (ej. ventas@empresa.com)"
                                                     value={rule.emailTargets} 
                                                     onChange={e => updateRule(chat.id, rule.id, 'emailTargets', e.target.value)}
                                                     className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
@@ -1389,7 +1392,7 @@ export default function App() {
                                 </div>
                                 <input 
                                   type="text" 
-                                  placeholder="Destinatarios (coma)"
+                                  placeholder="Destinatarios a notificar (ej. ventas@empresa.com)"
                                   value={template.emailTargets} 
                                   onChange={e => {
                                     if (!config) return;
