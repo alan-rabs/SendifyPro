@@ -10,8 +10,7 @@ import { createRequire } from 'module';
 import * as db from './db.js';
 
 const require = createRequire(import.meta.url);
-import * as pdfParse from 'pdf-parse';
-const pdf = (pdfParse as any).default || pdfParse;
+const pdf = require('pdf-parse');
 
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 
@@ -243,8 +242,16 @@ async function processMessage(msg: any): Promise<boolean> {
       if (media && media.mimetype === 'application/pdf' && !processingError) {
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
-          const pdfData = await pdf(pdfBuffer);
-          textContent = pdfData.text || '';
+          if (typeof pdf === 'function') {
+            const pdfData = await pdf(pdfBuffer);
+            textContent = pdfData.text || '';
+          } else if (pdf && typeof pdf.default === 'function') {
+            const pdfData = await pdf.default(pdfBuffer);
+            textContent = pdfData.text || '';
+          } else {
+            log('ERROR', `pdf-parse no es una función (tipo: ${typeof pdf}).`);
+            processingError = true;
+          }
         } catch (e) {
           log('ERROR', `Error al extraer texto de PDF: ${e instanceof Error ? e.message : String(e)}`);
           processingError = true;
