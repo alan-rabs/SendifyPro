@@ -59,6 +59,10 @@ try {
       message TEXT,
       error TEXT
     );
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_audit_phone ON audit_logs(phone_number);
     CREATE TABLE IF NOT EXISTS email_queue (
@@ -232,6 +236,11 @@ export function getStats() {
   rows.forEach(row => {
     stats[row.key] = row.value;
   });
+  
+  // Add last processed file to stats
+  const lastFile = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_processed_file') as any;
+  stats.lastProcessedFile = lastFile ? lastFile.value : 'Ninguno';
+  
   return stats;
 }
 
@@ -264,6 +273,8 @@ export function clearProcessedMessagesCache() {
   db.prepare('DELETE FROM processed_messages').run();
   db.prepare('DELETE FROM processed_pdfs').run();
   db.prepare('DELETE FROM processed_text_signatures').run();
+  db.prepare('DELETE FROM stats').run();
+  db.prepare('DELETE FROM metadata WHERE key = ?').run('last_processed_file');
 }
 
 export function isPdfProcessed(hash: string) {
@@ -337,4 +348,20 @@ export function removeFromEmailQueue(id: string) {
   db.prepare('DELETE FROM email_queue WHERE id = ?').run(id);
 }
 
-export default db;
+export function setMetadata(key: string, value: string) {
+  try {
+    db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(key, value);
+  } catch (e) {
+    console.error(`Error setting metadata ${key}:`, e);
+  }
+}
+
+export function getMetadata(key: string) {
+  try {
+    const row = db.prepare('SELECT value FROM metadata WHERE key = ?').get(key) as any;
+    return row ? row.value : null;
+  } catch (e) {
+    console.error(`Error getting metadata ${key}:`, e);
+    return null;
+  }
+}

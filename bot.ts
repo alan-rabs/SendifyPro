@@ -277,6 +277,7 @@ async function processMessage(msg: any): Promise<boolean> {
             textContent = pdfData.text || '';
             log('INFO', `✅ Texto extraído correctamente (${textContent.length} caracteres).`);
             db.incrementStat('processedPdfs');
+            db.setMetadata('last_processed_file', media.filename || 'PDF sin nombre');
           } else {
             log('ERROR', `❌ No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
             processingError = true;
@@ -363,10 +364,19 @@ async function processMessage(msg: any): Promise<boolean> {
           const subject = replacePlaceholders(rule.emailSubject || 'Alerta de Regla: {rule_name}', textContent, nss, curp, rule.name);
           const body = replacePlaceholders(rule.emailBody || 'Se ha detectado una coincidencia con la regla {rule_name}.', textContent, nss, curp, rule.name);
           
-          const attachment = (msg.hasMedia && media) ? {
-            filename: media.filename || `archivo_${Date.now()}.${media.mimetype.split('/')[1] || 'bin'}`,
-            content: Buffer.from(media.data, 'base64')
-          } : null;
+          let attachment = null;
+          if (msg.hasMedia && media) {
+            let filename = media.filename || `archivo_${Date.now()}.${media.mimetype.split('/')[1] || 'bin'}`;
+            if (rule.emailAttachmentName) {
+              const customName = replacePlaceholders(rule.emailAttachmentName, textContent, nss, curp, rule.name);
+              const ext = filename.split('.').pop() || 'bin';
+              filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
+            }
+            attachment = {
+              filename,
+              content: Buffer.from(media.data, 'base64')
+            };
+          }
 
           const targets = rule.emailTargets || config.emailDestino;
           const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, chatConfig.emailCc, rule.name);
@@ -382,7 +392,18 @@ async function processMessage(msg: any): Promise<boolean> {
         // Process WhatsApp Action
         if (rule.waEnabled) {
           const waMsg = replacePlaceholders(rule.waMessage || 'Regla disparada: {rule_name}', textContent, nss, curp, rule.name);
-          const sent = await sendToWhatsAppChats(rule.waTargets, waMsg, (msg.hasMedia && media) ? media : null);
+          
+          let waMedia = null;
+          if (msg.hasMedia && media) {
+            waMedia = { ...media };
+            if (rule.waAttachmentName) {
+              const customName = replacePlaceholders(rule.waAttachmentName, textContent, nss, curp, rule.name);
+              const ext = (media.filename || '').split('.').pop() || 'bin';
+              waMedia.filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
+            }
+          }
+
+          const sent = await sendToWhatsAppChats(rule.waTargets, waMsg, waMedia);
           if (sent) {
             waSent = true;
             log('INFO', `📱 Mensaje de WhatsApp enviado para regla "${rule.name}" a: ${rule.waTargets}`);

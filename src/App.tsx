@@ -42,6 +42,7 @@ interface Stats {
   processedPdfs: number;
   emailsSent: number;
   errorsDetected: number;
+  lastProcessedFile?: string;
 }
 
 interface BotStatus {
@@ -75,9 +76,11 @@ interface AutomationRule {
   emailTargets: string;
   emailSubject: string;
   emailBody: string;
+  emailAttachmentName?: string;
   waEnabled: boolean;
   waTargets: string;
   waMessage: string;
+  waAttachmentName?: string;
 }
 
 interface ChatConfig {
@@ -743,26 +746,21 @@ export default function App() {
                     onToggle={() => setExpandedStats(!expandedStats)}
                   >
                     <div className="space-y-4">
-                      <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
-                        <span className="text-xs text-zinc-500 uppercase font-bold">Plataforma</span>
-                        <span className="text-sm font-medium text-zinc-200">{status?.system?.platform || 'WhatsApp Web JS'} ({status?.system?.arch || 'x64'})</span>
-                      </div>
-                      <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
-                        <span className="text-xs text-zinc-500 uppercase font-bold">Memoria</span>
-                        <span className="text-sm font-medium text-zinc-200">
-                          {status?.system ? `${Math.round((status.system.totalMem - status.system.freeMem) / 1024 / 1024)}MB / ${Math.round(status.system.totalMem / 1024 / 1024)}MB` : 'LocalAuth (Persistente)'}
+                      <div className="flex flex-col py-2 border-b border-zinc-800/50">
+                        <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Último Archivo</span>
+                        <span className="text-sm font-medium text-blue-400 truncate" title={status?.stats.lastProcessedFile}>
+                          {status?.stats.lastProcessedFile || 'Ninguno'}
                         </span>
                       </div>
                       <div className="flex justify-between items-center py-2 border-b border-zinc-800/50">
-                        <span className="text-xs text-zinc-500 uppercase font-bold">Uptime</span>
-                        <span className="text-sm font-medium text-zinc-200">
-                          {status?.system ? `${Math.floor(status.system.uptime / 3600)}h ${Math.floor((status.system.uptime % 3600) / 60)}m` : 'America/Mexico_City'}
-                        </span>
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Sesión</span>
+                        <span className="text-sm font-medium text-zinc-200">Activa</span>
                       </div>
                       <div className="flex justify-between items-center py-2">
-                        <span className="text-xs text-zinc-500 uppercase font-bold">Carga CPU</span>
-                        <span className="text-sm font-medium text-zinc-200">
-                          {status?.system?.cpuLoad ? status.system.cpuLoad[0].toFixed(2) : 'Invisible (Headless)'}
+                        <span className="text-xs text-zinc-500 uppercase font-bold">Estado</span>
+                        <span className="text-sm font-medium text-emerald-400 flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          En línea
                         </span>
                       </div>
                     </div>
@@ -1369,6 +1367,17 @@ export default function App() {
                                                     onChange={e => updateRule(chat.id, rule.id, 'emailBody', e.target.value)}
                                                     className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none h-12 resize-none"
                                                   />
+                                                  <div className="space-y-1">
+                                                    <label className="text-[9px] text-zinc-500 font-bold uppercase">Nombre del PDF (Opcional)</label>
+                                                    <input 
+                                                      type="text" 
+                                                      placeholder="Ej: NSS_{nss}_CURP_{curp}"
+                                                      value={rule.emailAttachmentName || ''} 
+                                                      onChange={e => updateRule(chat.id, rule.id, 'emailAttachmentName', e.target.value)}
+                                                      className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
+                                                    />
+                                                    <p className="text-[8px] text-zinc-600 italic">Usa {`{nss}`} y {`{curp}`} para personalizar.</p>
+                                                  </div>
                                                 </div>
                                               )}
                                             </div>
@@ -1402,6 +1411,17 @@ export default function App() {
                                                     onChange={e => updateRule(chat.id, rule.id, 'waMessage', e.target.value)}
                                                     className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none h-12 resize-none"
                                                   />
+                                                  <div className="space-y-1">
+                                                    <label className="text-[9px] text-zinc-500 font-bold uppercase">Nombre del PDF (Opcional)</label>
+                                                    <input 
+                                                      type="text" 
+                                                      placeholder="Ej: NSS_{nss}_CURP_{curp}"
+                                                      value={rule.waAttachmentName || ''} 
+                                                      onChange={e => updateRule(chat.id, rule.id, 'waAttachmentName', e.target.value)}
+                                                      className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
+                                                    />
+                                                    <p className="text-[8px] text-zinc-600 italic">Usa {`{nss}`} y {`{curp}`} para personalizar.</p>
+                                                  </div>
                                                 </div>
                                               )}
                                             </div>
