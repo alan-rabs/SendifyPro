@@ -759,7 +759,7 @@ export default function App() {
                   {/* Right Column: Logs */}
                   <div className={status?.status === 'awaiting_qr' && status.qrCode ? "lg:col-span-2" : "lg:col-span-3"}>
                     <Card title="Consola de Eventos" icon={Database} className="h-full flex flex-col">
-                      <div className="flex-1 overflow-y-auto min-h-[600px] max-h-[1000px] font-mono text-[11px] space-y-1 p-2 bg-zinc-300 text-black custom-scrollbar">
+                      <div className="flex-1 overflow-y-auto min-h-[600px] max-h-[1000px] font-mono text-[11px] space-y-1 p-2 bg-[#828385] text-black custom-scrollbar">
                         {logs.length === 0 ? (
                           <p className="text-zinc-600 italic">Esperando eventos...</p>
                         ) : (
