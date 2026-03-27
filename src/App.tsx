@@ -208,8 +208,26 @@ export default function App() {
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [expandedStats, setExpandedStats] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState("");
 
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const channel = new BroadcastChannel('sendify_pro_session');
+    channel.postMessage({ type: 'NEW_TAB_OPENED' });
+    
+    channel.onmessage = (event) => {
+      if (event.data.type === 'NEW_TAB_OPENED' && isUpdating) {
+        setUpdateProgress("Se ha abierto una nueva ventana con la versión actualizada. Puedes cerrar esta.");
+        setTimeout(() => {
+          window.close();
+        }, 3000);
+      }
+    };
+    
+    return () => channel.close();
+  }, [isUpdating]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -365,19 +383,39 @@ export default function App() {
   };
 
   const handleApplyUpdate = async () => {
-    if (!window.confirm("¿Estás seguro de aplicar la actualización? El bot descargará los archivos, compilará y se reiniciará. Si estás en Localhost, deberás iniciarlo manualmente después.")) return;
+    if (!window.confirm("¿Estás seguro de aplicar la actualización? El bot descargará los archivos, compilará y se reiniciará. Este proceso puede tardar un minuto.")) return;
+    
+    setIsUpdating(true);
+    setUpdateProgress("Descargando archivos y preparando actualización...");
+    
     try {
       const res = await fetch('/api/update/apply', { method: 'POST' });
       if (res.ok) {
-        toast.info("Actualización en curso. El servidor se cerrará en unos segundos para aplicar los cambios.", { duration: 10000 });
-        setTimeout(() => {
-          toast.warning("El servidor se está reiniciando. Si la página no carga en 1 minuto, inicia el bot manualmente o usa run.bat.", { duration: 20000 });
+        setUpdateProgress("Actualización en curso. El servidor se está reiniciando. Por favor, espera...");
+        
+        // Start polling the server to see when it's back
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch('/api/status');
+            if (statusRes.ok) {
+              clearInterval(pollInterval);
+              setUpdateProgress("¡Actualización completada! Recargando esta ventana...");
+              setTimeout(() => {
+                window.location.reload();
+              }, 2000);
+            }
+          } catch (e) {
+            // Server is down, keep polling
+          }
         }, 5000);
       } else {
-        toast.error("Error al aplicar actualización.");
+        const data = await res.json();
+        toast.error(data.error || "Error al aplicar actualización.");
+        setIsUpdating(false);
       }
     } catch (e) {
       toast.error("Error de conexión durante la actualización.");
+      setIsUpdating(false);
     }
   };
 
@@ -465,6 +503,21 @@ export default function App() {
   return (
     <div className="min-h-screen bg-black text-zinc-300 font-sans selection:bg-zinc-700 selection:text-white">
       <Toaster position="top-right" theme="dark" richColors closeButton />
+      
+      {isUpdating && (
+        <div className="fixed inset-0 z-[9999] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-20 h-20 border-4 border-zinc-700 border-t-zinc-100 rounded-full animate-spin mb-8" />
+          <h2 className="text-2xl font-bold text-white mb-4">Actualizando Sendify PRO</h2>
+          <p className="text-zinc-400 max-w-md leading-relaxed">{updateProgress}</p>
+          <p className="mt-8 text-xs text-zinc-500 uppercase tracking-widest animate-pulse">No cierres esta ventana</p>
+          <button 
+            onClick={() => window.close()}
+            className="mt-12 text-zinc-500 hover:text-zinc-300 text-sm underline underline-offset-4"
+          >
+            Cerrar esta pestaña manualmente
+          </button>
+        </div>
+      )}
       
       {/* Sidebar */}
       <motion.div 
