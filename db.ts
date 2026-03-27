@@ -241,6 +241,9 @@ export function getStats() {
   const lastFile = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_processed_file') as any;
   stats.lastProcessedFile = lastFile ? lastFile.value : 'Ninguno';
   
+  const lastError = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_email_error') as any;
+  stats.lastEmailError = lastError ? lastError.value : '';
+  
   return stats;
 }
 
@@ -275,6 +278,13 @@ export function clearProcessedMessagesCache() {
   db.prepare('DELETE FROM processed_text_signatures').run();
   db.prepare('DELETE FROM stats').run();
   db.prepare('DELETE FROM metadata WHERE key = ?').run('last_processed_file');
+  
+  // Reset emailsSentToday in config
+  const config = getConfig();
+  if (config) {
+    config.emailsSentToday = 0;
+    setConfig(config);
+  }
 }
 
 export function isPdfProcessed(hash: string) {

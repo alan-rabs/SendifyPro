@@ -675,6 +675,9 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
 
     await transporter.sendMail(mailOptions);
     
+    // Clear last error if successful
+    db.setMetadata('last_email_error', '');
+    
     // Increment counter if not already incremented by queueing
     if (!isBatch) {
       db.incrementEmailSentToday();
@@ -686,7 +689,9 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
     
     return true;
   } catch (err: any) {
-    log('ERROR', `Error SMTP: ${err.message}`);
+    const errorMsg = `Error SMTP: ${err.message}`;
+    log('ERROR', errorMsg);
+    db.setMetadata('last_email_error', errorMsg);
     return false;
   }
 }

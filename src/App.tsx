@@ -43,6 +43,7 @@ interface Stats {
   emailsSent: number;
   errorsDetected: number;
   lastProcessedFile?: string;
+  lastEmailError?: string;
 }
 
 interface BotStatus {
@@ -58,6 +59,7 @@ interface BotStatus {
     platform: string;
     arch: string;
   };
+  emailQueue?: any[];
 }
 
 interface LogEntry {
@@ -215,7 +217,7 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [expandedStats, setExpandedStats] = useState(false);
+  const [expandedStatCard, setExpandedStatCard] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateProgress, setUpdateProgress] = useState("");
@@ -742,8 +744,8 @@ export default function App() {
                     value={status?.stats.processedPdfs || 0} 
                     icon={FileText} 
                     colorClass="bg-blue-500"
-                    isExpanded={expandedStats}
-                    onToggle={() => setExpandedStats(!expandedStats)}
+                    isExpanded={expandedStatCard === 'Archivos Procesados'}
+                    onToggle={() => setExpandedStatCard(expandedStatCard === 'Archivos Procesados' ? null : 'Archivos Procesados')}
                   >
                     <div className="space-y-4">
                       <div className="flex flex-col py-2 border-b border-zinc-800/50">
@@ -770,28 +772,70 @@ export default function App() {
                     value={status?.stats.emailsSent || 0} 
                     icon={Mail} 
                     colorClass="bg-emerald-500"
-                    isExpanded={expandedStats}
-                    onToggle={() => setExpandedStats(!expandedStats)}
+                    isExpanded={expandedStatCard === 'Correos Enviados'}
+                    onToggle={() => setExpandedStatCard(expandedStatCard === 'Correos Enviados' ? null : 'Correos Enviados')}
                   >
                     <div className="space-y-4">
+                      {status?.stats.lastEmailError && (
+                        <div className="p-2 bg-rose-500/10 border border-rose-500/20 rounded text-[10px] text-rose-400 font-mono break-words">
+                          <div className="flex items-center gap-1.5 mb-1 font-bold">
+                            <AlertTriangle size={10} />
+                            ÚLTIMO ERROR SMTP
+                          </div>
+                          {status.stats.lastEmailError}
+                        </div>
+                      )}
+
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-zinc-500 uppercase font-bold">Estado Agrupación</span>
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${config?.emailBatchingEnabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${config?.emailBatchingEnabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-zinc-500'}`}>
                           {config?.emailBatchingEnabled ? 'ACTIVO' : 'INACTIVO'}
                         </span>
                       </div>
+
                       {config?.emailBatchingEnabled && (
-                        <div className="space-y-2">
-                          <p className="text-xs text-zinc-400">Próximos envíos programados:</p>
-                          <div className="flex flex-wrap gap-2">
-                            {(config.emailSchedules || []).filter(Boolean).map((t, i) => (
-                              <span key={i} className="px-2 py-1 bg-zinc-800 rounded text-xs font-mono text-zinc-200">{t}</span>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-zinc-500 uppercase font-bold">Cola de Envío</span>
+                            <span className="text-[10px] font-mono text-zinc-400">
+                              {status?.emailQueue?.length || 0} / {config.emailBatchLimit || 20}
+                            </span>
+                          </div>
+                          
+                          <div className="max-h-40 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                            {(status?.emailQueue || []).map((item, idx) => (
+                              <div key={idx} className="p-2 bg-zinc-950 border border-zinc-800 rounded text-[9px]">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="font-bold text-zinc-300 truncate max-w-[120px]">{item.caseType}</span>
+                                  <span className="text-zinc-500">{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                                <div className="text-zinc-400 truncate mb-1">{item.to}</div>
+                                {item.attachment && (
+                                  <div className="flex items-center gap-1 text-blue-400 italic">
+                                    <FileText size={8} />
+                                    <span className="truncate">{item.attachment.filename}</span>
+                                  </div>
+                                )}
+                              </div>
                             ))}
-                            {(config.emailSchedules || []).filter(Boolean).length === 0 && (
-                              <span className="text-[10px] text-zinc-600 italic">No programado</span>
+                            {(status?.emailQueue || []).length === 0 && (
+                              <div className="py-4 text-center text-[10px] text-zinc-600 italic">
+                                Cola vacía
+                              </div>
                             )}
                           </div>
-                          <p className="text-[10px] text-zinc-500 italic mt-2">O al alcanzar {config.emailBatchLimit || 20} correos en cola.</p>
+
+                          <div className="pt-2 border-t border-zinc-800/50">
+                            <p className="text-[9px] text-zinc-500 mb-1">Horarios programados:</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {(config.emailSchedules || []).filter(Boolean).map((t, i) => (
+                                <span key={i} className="px-1.5 py-0.5 bg-zinc-800 rounded text-[9px] font-mono text-zinc-300 border border-zinc-700">{t}</span>
+                              ))}
+                              {(config.emailSchedules || []).filter(Boolean).length === 0 && (
+                                <span className="text-[9px] text-zinc-600 italic">No programado</span>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -801,8 +845,8 @@ export default function App() {
                     value={status?.stats.errorsDetected || 0} 
                     icon={AlertTriangle} 
                     colorClass="bg-rose-500"
-                    isExpanded={expandedStats}
-                    onToggle={() => setExpandedStats(!expandedStats)}
+                    isExpanded={expandedStatCard === 'Eventos Detectados'}
+                    onToggle={() => setExpandedStatCard(expandedStatCard === 'Eventos Detectados' ? null : 'Eventos Detectados')}
                   >
                     <div className="space-y-2">
                       <p className="text-xs text-zinc-400">Total de coincidencias con reglas que resultaron en una acción (Email o WhatsApp).</p>

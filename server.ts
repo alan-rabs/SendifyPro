@@ -66,7 +66,8 @@ async function startServer() {
         uptime: os.uptime(),
         platform: os.platform(),
         arch: os.arch()
-      }
+      },
+      emailQueue: db.getEmailQueue()
     });
   });
 
