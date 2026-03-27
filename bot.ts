@@ -9,8 +9,8 @@ import cron from 'node-cron';
 import { createRequire } from 'module';
 import * as db from './db.js';
 
+import { PDFParse } from 'pdf-parse';
 const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse');
 
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 
@@ -242,14 +242,12 @@ async function processMessage(msg: any): Promise<boolean> {
       if (media && media.mimetype === 'application/pdf' && !processingError) {
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
-          if (typeof pdf === 'function') {
-            const pdfData = await pdf(pdfBuffer);
-            textContent = pdfData.text || '';
-          } else if (pdf && typeof pdf.default === 'function') {
-            const pdfData = await pdf.default(pdfBuffer);
+          if (typeof PDFParse === 'function') {
+            const parser = new PDFParse({ data: pdfBuffer });
+            const pdfData = await parser.getText();
             textContent = pdfData.text || '';
           } else {
-            log('ERROR', `pdf-parse no es una función (tipo: ${typeof pdf}).`);
+            log('ERROR', `PDFParse no es una función (tipo: ${typeof PDFParse}).`);
             processingError = true;
           }
         } catch (e) {
