@@ -314,17 +314,6 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
-    // Open browser automatically
-    try {
-      if (process.platform === 'win32') {
-        exec(`start http://localhost:${PORT}`);
-      } else if (process.platform === 'darwin') {
-        exec(`open http://localhost:${PORT}`);
-      }
-    } catch (err) {
-      console.log("Could not open browser automatically.");
-    }
-    
     if (process.env.AUTOSTART_BOT === 'true') {
       console.log("[AutoStart] Starting bot automatically...");
       startBot();

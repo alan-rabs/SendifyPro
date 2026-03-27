@@ -242,12 +242,19 @@ async function processMessage(msg: any): Promise<boolean> {
       if (media && media.mimetype === 'application/pdf' && !processingError) {
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
-          if (typeof PDFParse === 'function') {
-            const parser = new PDFParse({ data: pdfBuffer });
+          
+          // Intentar obtener la clase PDFParse de diferentes formas según el entorno
+          let ParserClass = PDFParse;
+          if (typeof ParserClass !== 'function' && (ParserClass as any)?.PDFParse) {
+            ParserClass = (ParserClass as any).PDFParse;
+          }
+
+          if (typeof ParserClass === 'function') {
+            const parser = new (ParserClass as any)({ data: pdfBuffer });
             const pdfData = await parser.getText();
             textContent = pdfData.text || '';
           } else {
-            log('ERROR', `PDFParse no es una función (tipo: ${typeof PDFParse}).`);
+            log('ERROR', `No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
             processingError = true;
           }
         } catch (e) {
