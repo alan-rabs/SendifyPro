@@ -10,7 +10,8 @@ import { createRequire } from 'module';
 import * as db from './db.js';
 
 const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse');
+import * as pdfParse from 'pdf-parse';
+const pdf = (pdfParse as any).default || pdfParse;
 
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 
@@ -55,7 +56,8 @@ const DEFAULT_CONFIG = {
   auditWaTargets: '',
   
   // Chat configs
-  chatConfigs: []
+  chatConfigs: [],
+  initialFetchLimit: 50
 };
 
 let config: any = db.getConfig() || DEFAULT_CONFIG;
@@ -137,8 +139,9 @@ export async function startBot() {
         const targetChat = chats.find((c: any) => c.name === chatConf.targetContact || c.name === chatConf.targetContact.trim());
 
         if (targetChat) {
-          log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos 50 mensajes...`);
-          const messages = await targetChat.fetchMessages({ limit: 50 });
+          const fetchLimit = config.initialFetchLimit || 50;
+          log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${fetchLimit} mensajes...`);
+          const messages = await targetChat.fetchMessages({ limit: fetchLimit });
           
           let processedCount = 0;
           for (const msg of messages) {
@@ -223,6 +226,7 @@ async function processMessage(msg: any): Promise<boolean> {
     let didProcessSomething = false;
     let media: any = null;
     let textContent = msg.body || '';
+    let processingError = false;
 
     if (msg.hasMedia) {
       media = await msg.downloadMedia();
@@ -230,9 +234,10 @@ async function processMessage(msg: any): Promise<boolean> {
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
           const pdfData = await pdf(pdfBuffer);
-          textContent = pdfData.text;
+          textContent = pdfData.text || '';
         } catch (e) {
           log('ERROR', `Error al extraer texto de PDF: ${e instanceof Error ? e.message : String(e)}`);
+          processingError = true;
         }
       }
     }
@@ -329,7 +334,9 @@ async function processMessage(msg: any): Promise<boolean> {
       }
     }
 
-    db.markMessageProcessed(msg.id._serialized);
+    if (!processingError) {
+      db.markMessageProcessed(msg.id._serialized);
+    }
     return didProcessSomething;
 
   } catch (err: any) {

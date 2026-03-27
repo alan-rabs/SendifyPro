@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Play, 
   Square, 
@@ -112,6 +112,7 @@ interface Config {
   emailBatchingEnabled?: boolean;
   emailBatchLimit?: number;
   emailSchedules?: string[];
+  initialFetchLimit?: number;
   auditActionEmailEnabled: boolean;
   auditEmailTargets: string;
   auditActionWaEnabled: boolean;
@@ -198,6 +199,7 @@ const StatCard = ({ label, value, icon: Icon, colorClass, children, isExpanded, 
 export default function App() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const logsEndRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<Config | null>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -231,6 +233,12 @@ export default function App() {
       console.error("Error fetching logs", e);
     }
   }, []);
+
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs]);
 
   const fetchConfig = useCallback(async (force = false) => {
     // Si estamos en la pestaña de configuración o actualización, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
@@ -751,22 +759,23 @@ export default function App() {
                   {/* Right Column: Logs */}
                   <div className={status?.status === 'awaiting_qr' && status.qrCode ? "lg:col-span-2" : "lg:col-span-3"}>
                     <Card title="Consola de Eventos" icon={Database} className="h-full flex flex-col">
-                      <div className="flex-1 overflow-y-auto min-h-[600px] max-h-[1000px] font-mono text-[11px] space-y-1 pr-2 custom-scrollbar">
+                      <div className="flex-1 overflow-y-auto min-h-[600px] max-h-[1000px] font-mono text-[11px] space-y-1 p-2 bg-zinc-300 text-black custom-scrollbar">
                         {logs.length === 0 ? (
                           <p className="text-zinc-600 italic">Esperando eventos...</p>
                         ) : (
-                          logs.slice().reverse().map((log, i) => (
-                            <div key={i} className="flex gap-3 py-1 border-b border-zinc-800/30 last:border-0">
+                          logs.map((log, i) => (
+                            <div key={i} className="flex gap-3 py-1 border-b border-zinc-400/30 last:border-0">
                               <span className="text-zinc-600 shrink-0">[{new Date(log.time).toLocaleTimeString()}]</span>
                               <span className={`font-bold shrink-0 w-12 ${
-                                log.level === 'ERROR' ? 'text-rose-500' : 
-                                log.level === 'WARN' ? 'text-amber-500' : 
-                                log.level === 'INFO' ? 'text-blue-400' : 'text-zinc-500'
+                                log.level === 'ERROR' ? 'text-rose-600' : 
+                                log.level === 'WARN' ? 'text-amber-600' : 
+                                log.level === 'INFO' ? 'text-blue-600' : 'text-zinc-600'
                               }`}>{log.level}</span>
-                              <span className="text-zinc-300 break-words">{log.message}</span>
+                              <span className="text-black break-words">{log.message}</span>
                             </div>
                           ))
                         )}
+                        <div ref={logsEndRef} />
                       </div>
                     </Card>
                   </div>
@@ -956,6 +965,27 @@ export default function App() {
                         <p className="text-[11px] text-zinc-400 leading-relaxed">
                           Los envíos se agrupan de forma inteligente por <strong>Caso y Destinatario</strong>, asegurando que cada chat configurado reciba su propio resumen organizado.
                         </p>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+
+                <div className="space-y-4">
+                  <Card title="Configuración General del Bot" icon={Settings}>
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Límite de mensajes iniciales</span>
+                          <span className="text-xs text-zinc-500">Cantidad de mensajes a revisar al iniciar el bot</span>
+                        </div>
+                        <input 
+                          type="number" 
+                          min="1"
+                          max="500"
+                          value={config?.initialFetchLimit || 50} 
+                          onChange={e => config && setConfig({...config, initialFetchLimit: parseInt(e.target.value) || 50})}
+                          className="w-24 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all text-right"
+                        />
                       </div>
                     </div>
                   </Card>
