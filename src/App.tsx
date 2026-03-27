@@ -140,13 +140,14 @@ interface UpdateInfo {
 
 // --- Components ---
 
-const Card = ({ children, title, icon: Icon, className = "" }: { children: React.ReactNode, title: string, icon?: any, className?: string }) => (
+const Card = ({ children, title, icon: Icon, className = "", action }: { children: React.ReactNode, title: string, icon?: any, className?: string, action?: React.ReactNode }) => (
   <div className={`bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden ${className}`}>
     <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50">
       <div className="flex items-center gap-2">
         {Icon && <Icon size={18} className="text-zinc-400" />}
         <h3 className="text-sm font-medium text-zinc-200 uppercase tracking-wider">{title}</h3>
       </div>
+      {action && <div>{action}</div>}
     </div>
     <div className="p-4">
       {children}
@@ -210,6 +211,7 @@ export default function App() {
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [expandedStats, setExpandedStats] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateProgress, setUpdateProgress] = useState("");
 
@@ -255,10 +257,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (logsEndRef.current) {
+    if (autoScroll && logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs]);
+  }, [logs, autoScroll]);
 
   const fetchConfig = useCallback(async (force = false) => {
     // Si estamos en la pestaña de configuración, auditoría o actualización, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
@@ -827,8 +829,25 @@ export default function App() {
 
                   {/* Right Column: Logs */}
                   <div className={status?.status === 'awaiting_qr' && status.qrCode ? "lg:col-span-2" : "lg:col-span-3"}>
-                    <Card title="Consola de Eventos" icon={Database} className="h-full flex flex-col">
-                      <div className="flex-1 overflow-y-auto min-h-[600px] max-h-[1000px] font-mono text-[11px] space-y-1 p-2 bg-[#828385] text-black custom-scrollbar">
+                    <Card 
+                      title="Consola de Eventos" 
+                      icon={Database} 
+                      className="h-full flex flex-col"
+                      action={
+                        <button 
+                          onClick={() => setAutoScroll(!autoScroll)}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold uppercase tracking-wider transition-all ${
+                            autoScroll 
+                            ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' 
+                            : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                          }`}
+                        >
+                          {autoScroll ? <CheckCircle2 size={12} /> : <Hash size={12} />}
+                          Auto-Scroll: {autoScroll ? 'ON' : 'OFF'}
+                        </button>
+                      }
+                    >
+                      <div className="flex-1 overflow-y-auto h-[500px] font-mono text-[11px] space-y-1 p-2 bg-[#828385] text-black custom-scrollbar rounded-lg shadow-inner">
                         {logs.length === 0 ? (
                           <p className="text-zinc-600 italic">Esperando eventos...</p>
                         ) : (

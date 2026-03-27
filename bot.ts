@@ -260,6 +260,7 @@ async function processMessage(msg: any): Promise<boolean> {
             const pdfData = await parser.getText();
             textContent = pdfData.text || '';
             log('INFO', `✅ Texto extraído correctamente (${textContent.length} caracteres).`);
+            db.incrementStat('processedPdfs');
           } else {
             log('ERROR', `❌ No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
             processingError = true;
@@ -363,8 +364,11 @@ async function processMessage(msg: any): Promise<boolean> {
         if (emailSent || waSent) {
           didProcessSomething = true;
           if (emailSent) db.incrementStat('emailsSent');
-          if (rule.type === 'file' && rule.subtype === 'pdf') db.incrementStat('processedPdfs');
-          else db.incrementStat('errorsDetected'); // Generic "event detected"
+          // If it's not a PDF, we count it as a generic "event detected" or "processed file"
+          // We don't increment processedPdfs here anymore because it's incremented on extraction for PDFs
+          if (rule.type !== 'file' || rule.subtype !== 'pdf') {
+            db.incrementStat('errorsDetected'); // Using errorsDetected as a generic "event detected" counter for now, or we could add a new one
+          }
 
           logAudit(chat.name, rule.name, nss, curp, textContent.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
         }
