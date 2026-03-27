@@ -241,6 +241,13 @@ export function getStats() {
   const lastFile = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_processed_file') as any;
   stats.lastProcessedFile = lastFile ? lastFile.value : 'Ninguno';
   
+  const recentFiles = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_processed_files') as any;
+  try {
+    stats.recentFiles = recentFiles ? JSON.parse(recentFiles.value) : [];
+  } catch (e) {
+    stats.recentFiles = [];
+  }
+  
   const lastError = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_email_error') as any;
   stats.lastEmailError = lastError ? lastError.value : '';
   
@@ -278,6 +285,7 @@ export function clearProcessedMessagesCache() {
   db.prepare('DELETE FROM processed_text_signatures').run();
   db.prepare('DELETE FROM stats').run();
   db.prepare('DELETE FROM metadata WHERE key = ?').run('last_processed_file');
+  db.prepare('DELETE FROM metadata WHERE key = ?').run('recent_processed_files');
   
   // Reset emailsSentToday in config
   const config = getConfig();

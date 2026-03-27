@@ -497,7 +497,18 @@ export default function App() {
       ...config,
       chatConfigs: config.chatConfigs.map(c => c.id === chatId ? {
         ...c,
-        rules: c.rules.map(r => r.id === ruleId ? { ...r, [field]: value } : r)
+        rules: c.rules.map(r => {
+          if (r.id === ruleId) {
+            const updatedRule = { ...r, [field]: value };
+            // Reset subtype if type changes to prevent inconsistent states
+            if (field === 'type') {
+              updatedRule.subtype = value === 'text' ? 'contains' : 'pdf';
+              updatedRule.triggerValue = ''; // Clear trigger value when type changes
+            }
+            return updatedRule;
+          }
+          return r;
+        })
       } : c)
     });
   };
@@ -758,6 +769,20 @@ export default function App() {
                         <span className="text-xs text-zinc-500 uppercase font-bold">Sesión</span>
                         <span className="text-sm font-medium text-zinc-200">Activa</span>
                       </div>
+                      
+                      {status?.stats.recentFiles && status.stats.recentFiles.length > 0 && (
+                        <div className="flex flex-col py-2 border-b border-zinc-800/50">
+                          <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2">Archivos Recientes</span>
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                            {status.stats.recentFiles.map((file: string, idx: number) => (
+                              <div key={idx} className="flex items-center gap-2 text-[11px] text-zinc-400 truncate">
+                                <FileText size={10} className="shrink-0 text-zinc-600" />
+                                <span className="truncate">{file}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div className="flex justify-between items-center py-2">
                         <span className="text-xs text-zinc-500 uppercase font-bold">Estado</span>
                         <span className="text-sm font-medium text-emerald-400 flex items-center gap-1.5">

@@ -277,7 +277,14 @@ async function processMessage(msg: any): Promise<boolean> {
             textContent = pdfData.text || '';
             log('INFO', `✅ Texto extraído correctamente (${textContent.length} caracteres).`);
             db.incrementStat('processedPdfs');
-            db.setMetadata('last_processed_file', media.filename || 'PDF sin nombre');
+            const fileName = media.filename || 'PDF sin nombre';
+            db.setMetadata('last_processed_file', fileName);
+            
+            // Update recent files list
+            const stats = db.getStats();
+            const recent = stats.recentFiles || [];
+            const updatedRecent = [fileName, ...recent.filter((f: string) => f !== fileName)].slice(0, 5);
+            db.setMetadata('recent_processed_files', JSON.stringify(updatedRecent));
           } else {
             log('ERROR', `❌ No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
             processingError = true;
@@ -332,6 +339,13 @@ async function processMessage(msg: any): Promise<boolean> {
           else if (subtype === 'video') typeMatch = mime.includes('video');
           else if (subtype === 'doc') typeMatch = mime.includes('word') || mime.includes('officedocument') || mime.includes('msword');
           else if (subtype === 'any') typeMatch = true;
+          else {
+            // Fallback for inconsistent state (e.g. subtype 'contains' in a file rule)
+            // If it's a PDF and the subtype is not one of the standard ones, we might want to match it anyway
+            // especially if the user intended it to be a PDF rule.
+            log('WARN', `Subtipo de archivo desconocido "${subtype}" en regla "${rule.name}". Intentando coincidencia por defecto.`);
+            typeMatch = mime.includes('pdf'); // Default to PDF as it's the most common use case
+          }
 
           log('DEBUG', `Regla de archivo "${rule.name}": Subtipo=${subtype}, Mime=${mime}, MatchTipo=${typeMatch}`);
 
