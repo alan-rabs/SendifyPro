@@ -113,6 +113,8 @@ interface Config {
   emailBatchLimit?: number;
   emailSchedules?: string[];
   initialFetchLimit?: number;
+  initialFetchMode?: 'limit' | 'date';
+  initialFetchDate?: string;
   auditActionEmailEnabled: boolean;
   auditEmailTargets: string;
   auditEmailSchedule?: string;
@@ -256,9 +258,11 @@ export default function App() {
     }
   }, []);
 
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    if (autoScroll && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (autoScroll && logsContainerRef.current) {
+      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
     }
   }, [logs, autoScroll]);
 
@@ -795,7 +799,7 @@ export default function App() {
                     </div>
                   </StatCard>
                   <StatCard 
-                    label="Errores Detectados" 
+                    label="Eventos Detectados" 
                     value={status?.stats.errorsDetected || 0} 
                     icon={AlertTriangle} 
                     colorClass="bg-rose-500"
@@ -803,7 +807,7 @@ export default function App() {
                     onToggle={() => setExpandedStats(!expandedStats)}
                   >
                     <div className="space-y-2">
-                      <p className="text-xs text-zinc-400">Últimos errores registrados en la consola de eventos o en la pestaña de auditoría.</p>
+                      <p className="text-xs text-zinc-400">Total de coincidencias con reglas que resultaron en una acción (Email o WhatsApp).</p>
                       <button 
                         onClick={() => setActiveTab('audit')}
                         className="text-xs text-rose-400 hover:text-rose-300 underline"
@@ -847,7 +851,10 @@ export default function App() {
                         </button>
                       }
                     >
-                      <div className="flex-1 overflow-y-auto h-[500px] font-mono text-[11px] space-y-1 p-2 bg-[#828385] text-black custom-scrollbar rounded-lg shadow-inner">
+                      <div 
+                        ref={logsContainerRef}
+                        className="flex-1 overflow-y-auto h-[500px] font-mono text-[11px] space-y-1 p-2 bg-[#828385] text-black custom-scrollbar rounded-lg shadow-inner"
+                      >
                         {logs.length === 0 ? (
                           <p className="text-zinc-600 italic">Esperando eventos...</p>
                         ) : (
@@ -863,7 +870,6 @@ export default function App() {
                             </div>
                           ))
                         )}
-                        <div ref={logsEndRef} />
                       </div>
                     </Card>
                   </div>
@@ -1072,19 +1078,57 @@ export default function App() {
                 <div className="space-y-4">
                   <Card title="Configuración General del Bot" icon={Settings}>
                     <div className="space-y-4">
-                      <div className="flex justify-between items-center p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium">Límite de mensajes iniciales</span>
-                          <span className="text-xs text-zinc-500">Cantidad de mensajes a revisar al iniciar el bot</span>
+                      <div className="flex flex-col gap-4 p-4 bg-zinc-950 border border-zinc-800 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">Modo de recuperación inicial</span>
+                            <span className="text-xs text-zinc-500">Cómo buscar mensajes pendientes al iniciar el bot</span>
+                          </div>
+                          <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+                            <button 
+                              onClick={() => config && setConfig({...config, initialFetchMode: 'limit'})}
+                              className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all ${config?.initialFetchMode === 'limit' || !config?.initialFetchMode ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:text-zinc-300'}`}
+                            >
+                              POR CANTIDAD
+                            </button>
+                            <button 
+                              onClick={() => config && setConfig({...config, initialFetchMode: 'date'})}
+                              className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all ${config?.initialFetchMode === 'date' ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:text-zinc-300'}`}
+                            >
+                              POR FECHA
+                            </button>
+                          </div>
                         </div>
-                        <input 
-                          type="number" 
-                          min="1"
-                          max="500"
-                          value={config?.initialFetchLimit || 50} 
-                          onChange={e => config && setConfig({...config, initialFetchLimit: parseInt(e.target.value) || 50})}
-                          className="w-24 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all text-right"
-                        />
+
+                        {config?.initialFetchMode === 'date' ? (
+                          <div className="flex items-center justify-between pt-2 border-t border-zinc-900">
+                            <div className="flex flex-col">
+                              <span className="text-sm font-medium">Fecha de inicio</span>
+                              <span className="text-xs text-zinc-500">Buscar mensajes desde esta fecha en adelante</span>
+                            </div>
+                            <input 
+                              type="date" 
+                              value={config?.initialFetchDate || new Date().toISOString().split('T')[0]} 
+                              onChange={e => config && setConfig({...config, initialFetchDate: e.target.value})}
+                              className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all text-right"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between pt-2 border-t border-zinc-900">
+                            <div className="flex flex-col">
+                              <span className="text-sm font-medium">Límite de mensajes</span>
+                              <span className="text-xs text-zinc-500">Cantidad de mensajes a revisar (máx. 500)</span>
+                            </div>
+                            <input 
+                              type="number" 
+                              min="1"
+                              max="500"
+                              value={config?.initialFetchLimit || 50} 
+                              onChange={e => config && setConfig({...config, initialFetchLimit: parseInt(e.target.value) || 50})}
+                              className="w-24 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all text-right"
+                            />
+                          </div>
+                        )}
                       </div>
                     </div>
                   </Card>

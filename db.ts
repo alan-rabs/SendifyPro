@@ -239,6 +239,18 @@ export function incrementStat(key: string) {
   db.prepare('INSERT OR REPLACE INTO stats (key, value) VALUES (?, COALESCE((SELECT value FROM stats WHERE key = ?), 0) + 1)').run(key, key);
 }
 
+export function incrementEmailSentToday() {
+  try {
+    const config = getConfig();
+    if (config) {
+      config.emailsSentToday = (config.emailsSentToday || 0) + 1;
+      setConfig(config);
+    }
+  } catch (e) {
+    console.error("Error incrementing emailsSentToday:", e);
+  }
+}
+
 // Processed IDs Helpers
 export function isMessageProcessed(id: string) {
   return !!db.prepare('SELECT 1 FROM processed_messages WHERE id = ?').get(id);

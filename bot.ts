@@ -58,7 +58,9 @@ const DEFAULT_CONFIG = {
   
   // Chat configs
   chatConfigs: [],
-  initialFetchLimit: 50
+  initialFetchLimit: 50,
+  initialFetchMode: 'limit', // 'limit' or 'date'
+  initialFetchDate: new Date().toISOString().split('T')[0] // Default to today
 };
 
 let config: any = db.getConfig() || DEFAULT_CONFIG;
@@ -140,9 +142,23 @@ export async function startBot() {
         const targetChat = chats.find((c: any) => c.name === chatConf.targetContact || c.name === chatConf.targetContact.trim());
 
         if (targetChat) {
-          const fetchLimit = config.initialFetchLimit || 50;
-          log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${fetchLimit} mensajes...`);
-          const messages = await targetChat.fetchMessages({ limit: fetchLimit });
+          let messages = [];
+          if (config.initialFetchMode === 'date') {
+            const targetDate = new Date(config.initialFetchDate || new Date());
+            targetDate.setHours(0, 0, 0, 0);
+            const targetTimestamp = Math.floor(targetDate.getTime() / 1000);
+            
+            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
+            
+            // Fetch a larger batch to find messages from that date
+            const batch = await targetChat.fetchMessages({ limit: 500 });
+            messages = batch.filter((m: any) => m.timestamp >= targetTimestamp);
+            log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
+          } else {
+            const fetchLimit = config.initialFetchLimit || 50;
+            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${fetchLimit} mensajes...`);
+            messages = await targetChat.fetchMessages({ limit: fetchLimit });
+          }
           
           let processedCount = 0;
           for (const msg of messages) {
@@ -284,6 +300,7 @@ async function processMessage(msg: any): Promise<boolean> {
 
     for (const rule of rules) {
       let isMatch = false;
+      log('DEBUG', `Probando regla "${rule.name}" (Tipo: ${rule.type}, Subtipo: ${rule.subtype})`);
 
       if (rule.type === 'text') {
         const text = textContent.trim();
@@ -301,6 +318,7 @@ async function processMessage(msg: any): Promise<boolean> {
             log('ERROR', `Regex inválido en regla "${rule.name}": ${trigger}`);
           }
         }
+        if (isMatch) log('DEBUG', `✅ Regla de texto "${rule.name}" coincide.`);
       } else if (rule.type === 'file') {
         if (msg.hasMedia && media) {
           const mime = media.mimetype.toLowerCase();
@@ -314,15 +332,23 @@ async function processMessage(msg: any): Promise<boolean> {
           else if (subtype === 'doc') typeMatch = mime.includes('word') || mime.includes('officedocument') || mime.includes('msword');
           else if (subtype === 'any') typeMatch = true;
 
+          log('DEBUG', `Regla de archivo "${rule.name}": Subtipo=${subtype}, Mime=${mime}, MatchTipo=${typeMatch}`);
+
           if (typeMatch) {
             if (trigger === '') {
               isMatch = true;
+              log('DEBUG', `✅ Regla de archivo "${rule.name}" coincide (disparador vacío).`);
             } else {
-              // If there's a trigger value, check if it's in the text content (for PDFs) or filename
               const filename = (media.filename || '').toLowerCase();
-              isMatch = textContent.toLowerCase().includes(trigger) || filename.includes(trigger);
+              const contentMatch = textContent.toLowerCase().includes(trigger);
+              const nameMatch = filename.includes(trigger);
+              isMatch = contentMatch || nameMatch;
+              log('DEBUG', `Regla de archivo "${rule.name}": Trigger=${trigger}, MatchContenido=${contentMatch}, MatchNombre=${nameMatch}`);
+              if (isMatch) log('DEBUG', `✅ Regla de archivo "${rule.name}" coincide.`);
             }
           }
+        } else {
+          log('DEBUG', `Regla de archivo "${rule.name}" ignorada: El mensaje no tiene media.`);
         }
       }
 
@@ -342,11 +368,14 @@ async function processMessage(msg: any): Promise<boolean> {
             content: Buffer.from(media.data, 'base64')
           } : null;
 
+          const targets = rule.emailTargets || config.emailDestino;
           const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, chatConfig.emailCc, rule.name);
           if (sent) {
             emailSent = true;
+            log('INFO', `📧 Acción de correo ejecutada para regla "${rule.name}". Destinatario(s): ${targets}`);
           } else {
             processingError = true;
+            log('ERROR', `❌ Falló la acción de correo para regla "${rule.name}".`);
           }
         }
 
@@ -356,19 +385,22 @@ async function processMessage(msg: any): Promise<boolean> {
           const sent = await sendToWhatsAppChats(rule.waTargets, waMsg, (msg.hasMedia && media) ? media : null);
           if (sent) {
             waSent = true;
+            log('INFO', `📱 Mensaje de WhatsApp enviado para regla "${rule.name}" a: ${rule.waTargets}`);
           } else {
             processingError = true;
+            log('ERROR', `❌ Falló el envío de WhatsApp para regla "${rule.name}".`);
           }
         }
 
         if (emailSent || waSent) {
           didProcessSomething = true;
-          if (emailSent) db.incrementStat('emailsSent');
-          // If it's not a PDF, we count it as a generic "event detected" or "processed file"
-          // We don't increment processedPdfs here anymore because it's incremented on extraction for PDFs
-          if (rule.type !== 'file' || rule.subtype !== 'pdf') {
-            db.incrementStat('errorsDetected'); // Using errorsDetected as a generic "event detected" counter for now, or we could add a new one
+          if (emailSent) {
+            db.incrementStat('emailsSent');
+            // Note: emailsSentToday is incremented inside queueOrSendEmail or sendEmail to avoid double counting
           }
+          
+          // Increment "Eventos Detectados" for any action taken
+          db.incrementStat('errorsDetected');
 
           logAudit(chat.name, rule.name, nss, curp, textContent.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
         }
@@ -458,11 +490,17 @@ async function queueOrSendEmail(
       bcc: bcc || '',
       attachment: attachmentInfo
     });
+    
+    // Increment quota reserved
+    db.incrementEmailSentToday();
+    // Update local config for immediate next checks
+    config.emailsSentToday = (config.emailsSentToday || 0) + 1;
+
     log('INFO', `Correo encolado para agrupación (Caso: ${caseType}).`);
     return true; // Assume success for queueing
   } else {
     // Send immediately
-    return await sendEmail(subject, text, attachment ? [attachment] : null, customTargets, bcc, cc);
+    return await sendEmail(subject, text, attachment ? [attachment] : null, customTargets, bcc, cc, false);
   }
 }
 
@@ -499,7 +537,7 @@ async function processEmailQueue() {
        }
     });
 
-    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc);
+    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true);
     if (sent) {
       log('INFO', `✅ Lote de ${items.length} correos enviado a ${first.to}`);
     } else {
@@ -543,7 +581,7 @@ setInterval(() => {
   }
 }, 30000); // Check every 30 seconds
 
-async function sendEmail(subject: string, text: string, attachments: { filename: string, content: Buffer }[] | null, customTargets?: string, bcc?: string, cc?: string) {
+async function sendEmail(subject: string, text: string, attachments: { filename: string, content: Buffer }[] | null, customTargets?: string, bcc?: string, cc?: string, isBatch: boolean = false) {
   if (!config.emailUser || !config.emailPass) {
     log('ERROR', 'Faltan credenciales de correo en la configuración.');
     return false;
@@ -616,9 +654,13 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
 
     await transporter.sendMail(mailOptions);
     
-    // Increment counter
-    config.emailsSentToday = (config.emailsSentToday || 0) + 1;
-    saveConfig(config);
+    // Increment counter if not already incremented by queueing
+    if (!isBatch) {
+      db.incrementEmailSentToday();
+      // We also update local config to keep it in sync for immediate next checks
+      config.emailsSentToday = (config.emailsSentToday || 0) + 1;
+    }
+    
     log('INFO', `✅ Correo enviado exitosamente a ${targets.join(', ')}. (${config.emailsSentToday}/${limit} hoy)`);
     
     return true;
