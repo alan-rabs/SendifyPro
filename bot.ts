@@ -51,8 +51,10 @@ const DEFAULT_CONFIG = {
   // Audit Actions
   auditActionEmailEnabled: true,
   auditEmailTargets: '',
+  auditEmailSchedule: '23:59',
   auditActionWaEnabled: false,
   auditWaTargets: '',
+  auditWaSchedule: '23:59',
   
   // Chat configs
   chatConfigs: [],
@@ -228,18 +230,22 @@ async function processMessage(msg: any): Promise<boolean> {
     let processingError = false;
 
     if (msg.hasMedia) {
+      log('INFO', `📄 Archivo detectado en "${chat.name}". Iniciando descarga...`);
       try {
         media = await msg.downloadMedia();
         if (!media) {
-          log('ERROR', `No se pudo descargar el archivo del mensaje.`);
+          log('ERROR', `❌ No se pudo descargar el archivo del mensaje.`);
           processingError = true;
+        } else {
+          log('INFO', `✅ Archivo descargado: ${media.filename || 'sin_nombre'} (${media.mimetype})`);
         }
       } catch (e) {
-        log('ERROR', `Error descargando media: ${e instanceof Error ? e.message : String(e)}`);
+        log('ERROR', `❌ Error descargando media: ${e instanceof Error ? e.message : String(e)}`);
         processingError = true;
       }
 
       if (media && media.mimetype === 'application/pdf' && !processingError) {
+        log('INFO', `🔍 Extrayendo texto del PDF...`);
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
           
@@ -253,12 +259,13 @@ async function processMessage(msg: any): Promise<boolean> {
             const parser = new (ParserClass as any)({ data: pdfBuffer });
             const pdfData = await parser.getText();
             textContent = pdfData.text || '';
+            log('INFO', `✅ Texto extraído correctamente (${textContent.length} caracteres).`);
           } else {
-            log('ERROR', `No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
+            log('ERROR', `❌ No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
             processingError = true;
           }
         } catch (e) {
-          log('ERROR', `Error al extraer texto de PDF: ${e instanceof Error ? e.message : String(e)}`);
+          log('ERROR', `❌ Error al extraer texto de PDF: ${e instanceof Error ? e.message : String(e)}`);
           processingError = true;
         }
       }
@@ -269,6 +276,10 @@ async function processMessage(msg: any): Promise<boolean> {
     const curpMatch = textContent.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/i);
     const nss = nssMatch ? nssMatch[0] : "NO_ENCONTRADO";
     const curp = curpMatch ? curpMatch[0].toUpperCase() : "NO_ENCONTRADO";
+
+    if (nss !== "NO_ENCONTRADO" || curp !== "NO_ENCONTRADO") {
+      log('INFO', `🔎 Datos identificados -> NSS: ${nss}, CURP: ${curp}`);
+    }
 
     for (const rule of rules) {
       let isMatch = false;
@@ -362,6 +373,10 @@ async function processMessage(msg: any): Promise<boolean> {
           break; // Stop after first match
         }
       }
+    }
+
+    if (!didProcessSomething && !processingError) {
+      log('DEBUG', `Fin de procesamiento: El mensaje no coincidió con ninguna regla en "${chat.name}".`);
     }
 
     if (!processingError) {
@@ -600,7 +615,7 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
     // Increment counter
     config.emailsSentToday = (config.emailsSentToday || 0) + 1;
     saveConfig(config);
-    log('INFO', `Correo enviado exitosamente. (${config.emailsSentToday}/${limit} hoy)`);
+    log('INFO', `✅ Correo enviado exitosamente a ${targets.join(', ')}. (${config.emailsSentToday}/${limit} hoy)`);
     
     return true;
   } catch (err: any) {
@@ -625,15 +640,16 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
     for (const name of targetNames) {
       const chat = chats.find((c: any) => c.name === name || c.name === name.trim());
       if (chat) {
+        log('INFO', `📱 Reenviando mensaje a: "${name}"...`);
         if (media) {
           await chat.sendMessage(media, { caption: message });
         } else {
           await chat.sendMessage(message);
         }
         sentCount++;
-        log('INFO', `Mensaje reenviado a chat: "${name}"`);
+        log('INFO', `✅ Mensaje reenviado exitosamente a: "${name}"`);
       } else {
-        log('WARN', `Chat destino no encontrado para reenvío: "${name}"`);
+        log('WARN', `❌ Chat destino no encontrado para reenvío: "${name}"`);
       }
     }
     
@@ -671,74 +687,83 @@ function generateCustomCsvFromDb(columns: string[]): string | null {
   return header + '\n' + rows.join('\n');
 }
 
-// Programar tarea diaria a las 23:59 para enviar el reporte CSV (Global)
-cron.schedule('59 23 * * *', async () => {
-  log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global)...');
-  
-  const dateStr = getLocalDateStr();
-  const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error'];
-  const csvContent = generateCustomCsvFromDb(columns);
-
-  if (!csvContent) {
-    log('INFO', 'No hay registros de auditoría para hoy. No se enviará reporte global.');
-    return;
-  }
-
-  try {
-    const csvBuffer = Buffer.from(csvContent);
-    const subject = `Reporte de Auditoría WhatsApp Bot - ${dateStr}`;
-    const text = `Adjunto el reporte de auditoría de los eventos procesados el día de hoy (${dateStr}).`;
-    
-    if (config.auditActionEmailEnabled && config.auditEmailTargets) {
-      await sendEmail(subject, text, [{ filename: `audit_${dateStr}.csv`, content: csvBuffer }], config.auditEmailTargets);
-    }
-    
-    if (config.auditActionWaEnabled && config.auditWaTargets) {
-      const { MessageMedia } = pkg;
-      const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `audit_${dateStr}.csv`);
-      await sendToWhatsAppChats(config.auditWaTargets, subject, media);
-    }
-  } catch (err: any) {
-    log('ERROR', `Error en reporte diario global: ${err.message}`);
-  }
-}, {
-  timezone: "America/Mexico_City"
-});
-
-// Programar tareas para plantillas personalizadas
-setInterval(() => {
+// Programar tareas para reportes y plantillas personalizadas
+setInterval(async () => {
   const now = new Date();
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-  
-  if (!config.auditTemplates) return;
-
   const dateStr = getLocalDateStr();
 
-  config.auditTemplates.forEach(async (template: any) => {
-    if (template.schedule === timeStr && (global as any).lastAuditRun !== `${template.id}_${dateStr}_${timeStr}`) {
-      (global as any).lastAuditRun = `${template.id}_${dateStr}_${timeStr}`;
-      
-      log('INFO', `Iniciando tarea programada para plantilla: "${template.name}"`);
-      
-      const customCsv = generateCustomCsvFromDb(template.columns);
-      if (!customCsv) {
-        log('INFO', `No hay datos para la plantilla "${template.name}" hoy.`);
-        return;
-      }
+  // 1. Reporte Global (Email)
+  const emailSchedule = config.auditEmailSchedule || '23:59';
+  if (config.auditActionEmailEnabled && config.auditEmailTargets && emailSchedule === timeStr && (global as any).lastAuditRunGlobalEmail !== `${dateStr}_${timeStr}`) {
+    (global as any).lastAuditRunGlobalEmail = `${dateStr}_${timeStr}`;
+    log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global Email)...');
+    
+    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error'];
+    const csvContent = generateCustomCsvFromDb(columns);
 
-      const csvBuffer = Buffer.from(customCsv);
-      const subject = `Reporte: ${template.name} - ${dateStr}`;
-      const text = `Adjunto el reporte personalizado "${template.name}" generado automáticamente.`;
-
-      if (template.emailEnabled && template.emailTargets) {
-        await sendEmail(subject, text, [{ filename: `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`, content: csvBuffer }], template.emailTargets);
-      }
-
-      if (template.waEnabled && template.waTargets) {
-        const { MessageMedia } = pkg;
-        const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`);
-        await sendToWhatsAppChats(template.waTargets, subject, media);
+    if (csvContent) {
+      try {
+        const csvBuffer = Buffer.from(csvContent);
+        const subject = `Reporte de Auditoría WhatsApp Bot (Email) - ${dateStr}`;
+        const text = `Adjunto el reporte de auditoría global de los eventos procesados el día de hoy (${dateStr}).`;
+        await sendEmail(subject, text, [{ filename: `audit_global_${dateStr}.csv`, content: csvBuffer }], config.auditEmailTargets);
+      } catch (err: any) {
+        log('ERROR', `Error en reporte diario global Email: ${err.message}`);
       }
     }
-  });
+  }
+
+  // 2. Reporte Global (WhatsApp)
+  const waSchedule = config.auditWaSchedule || '23:59';
+  if (config.auditActionWaEnabled && config.auditWaTargets && waSchedule === timeStr && (global as any).lastAuditRunGlobalWa !== `${dateStr}_${timeStr}`) {
+    (global as any).lastAuditRunGlobalWa = `${dateStr}_${timeStr}`;
+    log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global WhatsApp)...');
+    
+    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error'];
+    const csvContent = generateCustomCsvFromDb(columns);
+
+    if (csvContent) {
+      try {
+        const csvBuffer = Buffer.from(csvContent);
+        const subject = `Reporte de Auditoría WhatsApp Bot (WhatsApp) - ${dateStr}`;
+        const { MessageMedia } = pkg;
+        const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `audit_global_${dateStr}.csv`);
+        await sendToWhatsAppChats(config.auditWaTargets, subject, media);
+      } catch (err: any) {
+        log('ERROR', `Error en reporte diario global WhatsApp: ${err.message}`);
+      }
+    }
+  }
+
+  // 3. Plantillas Personalizadas
+  if (config.auditTemplates) {
+    config.auditTemplates.forEach(async (template: any) => {
+      if (template.schedule === timeStr && (global as any).lastAuditRun !== `${template.id}_${dateStr}_${timeStr}`) {
+        (global as any).lastAuditRun = `${template.id}_${dateStr}_${timeStr}`;
+        
+        log('INFO', `Iniciando tarea programada para plantilla: "${template.name}"`);
+        
+        const customCsv = generateCustomCsvFromDb(template.columns);
+        if (!customCsv) {
+          log('INFO', `No hay datos para la plantilla "${template.name}" hoy.`);
+          return;
+        }
+
+        const csvBuffer = Buffer.from(customCsv);
+        const subject = `Reporte: ${template.name} - ${dateStr}`;
+        const text = `Adjunto el reporte personalizado "${template.name}" generado automáticamente.`;
+
+        if (template.emailEnabled && template.emailTargets) {
+          await sendEmail(subject, text, [{ filename: `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`, content: csvBuffer }], template.emailTargets);
+        }
+
+        if (template.waEnabled && template.waTargets) {
+          const { MessageMedia } = pkg;
+          const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`);
+          await sendToWhatsAppChats(template.waTargets, subject, media);
+        }
+      }
+    });
+  }
 }, 60000); // Revisar cada minuto

@@ -115,8 +115,10 @@ interface Config {
   initialFetchLimit?: number;
   auditActionEmailEnabled: boolean;
   auditEmailTargets: string;
+  auditEmailSchedule?: string;
   auditActionWaEnabled: boolean;
   auditWaTargets: string;
+  auditWaSchedule?: string;
   githubRepo?: string;
   githubBranch?: string;
   githubToken?: string;
@@ -259,8 +261,8 @@ export default function App() {
   }, [logs]);
 
   const fetchConfig = useCallback(async (force = false) => {
-    // Si estamos en la pestaña de configuración o actualización, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
-    if ((activeTab === 'settings' || activeTab === 'update') && !force) return;
+    // Si estamos en la pestaña de configuración, auditoría o actualización, no sobrescribimos a menos que se fuerce (ej. al entrar a la pestaña)
+    if ((activeTab === 'settings' || activeTab === 'audit' || activeTab === 'update') && !force) return;
     
     try {
       const res = await fetch('/api/settings');
@@ -1625,7 +1627,10 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-4">
                       <div className="flex items-center justify-between p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-sm font-medium">Envío Diario por Email (23:59)</span>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Envío Diario por Email ({config?.auditEmailSchedule || '23:59'})</span>
+                          <span className="text-[10px] text-zinc-500 italic">Reporte global de auditoría</span>
+                        </div>
                         <input 
                           type="checkbox" 
                           checked={config?.auditActionEmailEnabled} 
@@ -1633,20 +1638,35 @@ export default function App() {
                           className="w-5 h-5 accent-zinc-100"
                         />
                       </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Destinatarios Email (coma)</label>
-                        <input 
-                          type="text" 
-                          placeholder="email1@example.com, email2@example.com"
-                          value={config?.auditEmailTargets || ''} 
-                          onChange={e => config && setConfig({...config, auditEmailTargets: e.target.value})}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
-                        />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Destinatarios Email (coma)</label>
+                          <input 
+                            type="text" 
+                            placeholder="email1@example.com, email2@example.com"
+                            value={config?.auditEmailTargets || ''} 
+                            onChange={e => config && setConfig({...config, auditEmailTargets: e.target.value})}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Horario (HH:MM)</label>
+                          <input 
+                            type="text" 
+                            placeholder="23:59"
+                            value={config?.auditEmailSchedule || '23:59'} 
+                            onChange={e => config && setConfig({...config, auditEmailSchedule: e.target.value})}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                          />
+                        </div>
                       </div>
                     </div>
                     <div className="space-y-4">
                       <div className="flex items-center justify-between p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <span className="text-sm font-medium">Envío Diario por WhatsApp (23:59)</span>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">Envío Diario por WhatsApp ({config?.auditWaSchedule || '23:59'})</span>
+                          <span className="text-[10px] text-zinc-500 italic">Reporte global de auditoría</span>
+                        </div>
                         <input 
                           type="checkbox" 
                           checked={config?.auditActionWaEnabled} 
@@ -1654,15 +1674,27 @@ export default function App() {
                           className="w-5 h-5 accent-zinc-100"
                         />
                       </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Nombres de Chats WA (coma)</label>
-                        <input 
-                          type="text" 
-                          placeholder="Grupo Auditoría, Jefe Sistemas"
-                          value={config?.auditWaTargets || ''} 
-                          onChange={e => config && setConfig({...config, auditWaTargets: e.target.value})}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
-                        />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Nombres de Chats WA (coma)</label>
+                          <input 
+                            type="text" 
+                            placeholder="Grupo Auditoría, Jefe Sistemas"
+                            value={config?.auditWaTargets || ''} 
+                            onChange={e => config && setConfig({...config, auditWaTargets: e.target.value})}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Horario (HH:MM)</label>
+                          <input 
+                            type="text" 
+                            placeholder="23:59"
+                            value={config?.auditWaSchedule || '23:59'} 
+                            onChange={e => config && setConfig({...config, auditWaSchedule: e.target.value})}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
