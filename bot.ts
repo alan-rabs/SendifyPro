@@ -229,8 +229,18 @@ async function processMessage(msg: any): Promise<boolean> {
     let processingError = false;
 
     if (msg.hasMedia) {
-      media = await msg.downloadMedia();
-      if (media && media.mimetype === 'application/pdf') {
+      try {
+        media = await msg.downloadMedia();
+        if (!media) {
+          log('ERROR', `No se pudo descargar el archivo del mensaje.`);
+          processingError = true;
+        }
+      } catch (e) {
+        log('ERROR', `Error descargando media: ${e instanceof Error ? e.message : String(e)}`);
+        processingError = true;
+      }
+
+      if (media && media.mimetype === 'application/pdf' && !processingError) {
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
           const pdfData = await pdf(pdfBuffer);
@@ -309,14 +319,22 @@ async function processMessage(msg: any): Promise<boolean> {
           } : null;
 
           const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, chatConfig.emailCc, rule.name);
-          if (sent) emailSent = true;
+          if (sent) {
+            emailSent = true;
+          } else {
+            processingError = true;
+          }
         }
 
         // Process WhatsApp Action
         if (rule.waEnabled) {
           const waMsg = replacePlaceholders(rule.waMessage || 'Regla disparada: {rule_name}', textContent, nss, curp, rule.name);
           const sent = await sendToWhatsAppChats(rule.waTargets, waMsg, (msg.hasMedia && media) ? media : null);
-          if (sent) waSent = true;
+          if (sent) {
+            waSent = true;
+          } else {
+            processingError = true;
+          }
         }
 
         if (emailSent || waSent) {
@@ -325,7 +343,7 @@ async function processMessage(msg: any): Promise<boolean> {
           if (rule.type === 'file' && rule.subtype === 'pdf') db.incrementStat('processedPdfs');
           else db.incrementStat('errorsDetected'); // Generic "event detected"
 
-          logAudit(chat.name, rule.name, nss, curp, textContent.substring(0, 200), rule.emailEnabled ? 'Email' : '' + (rule.waEnabled ? ' WA' : ''));
+          logAudit(chat.name, rule.name, nss, curp, textContent.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
         }
 
         if (chatConfig.processingMode === 'simple') {
@@ -336,6 +354,8 @@ async function processMessage(msg: any): Promise<boolean> {
 
     if (!processingError) {
       db.markMessageProcessed(msg.id._serialized);
+    } else {
+      log('WARN', `Mensaje ${msg.id._serialized} no marcado como procesado debido a errores. Se reintentará en el próximo inicio.`);
     }
     return didProcessSomething;
 

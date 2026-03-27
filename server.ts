@@ -93,6 +93,11 @@ async function startServer() {
     res.json({ success: true, message: "Deteniendo bot..." });
   });
 
+  app.post("/api/bot/clear-cache", (req, res) => {
+    db.clearProcessedMessagesCache();
+    res.json({ success: true, message: "Caché de mensajes procesados borrada." });
+  });
+
   app.post("/api/bot/logout", async (req, res) => {
     await stopBot();
     const sessionPath = path.join(process.cwd(), 'bot_data', 'session');

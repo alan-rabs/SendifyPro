@@ -248,6 +248,12 @@ export function markMessageProcessed(id: string) {
   db.prepare('INSERT OR IGNORE INTO processed_messages (id) VALUES (?)').run(id);
 }
 
+export function clearProcessedMessagesCache() {
+  db.prepare('DELETE FROM processed_messages').run();
+  db.prepare('DELETE FROM processed_pdfs').run();
+  db.prepare('DELETE FROM processed_text_signatures').run();
+}
+
 export function isPdfProcessed(hash: string) {
   return !!db.prepare('SELECT 1 FROM processed_pdfs WHERE hash = ?').get(hash);
 }

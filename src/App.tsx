@@ -329,6 +329,20 @@ export default function App() {
     }
   };
 
+  const handleClearCache = async () => {
+    try {
+      const res = await fetch('/api/bot/clear-cache', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message || "Caché de mensajes borrada.");
+      } else {
+        throw new Error(data.message || "Error al borrar caché.");
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Error al conectar con el servidor.");
+    }
+  };
+
   const handleSaveConfig = async () => {
     if (!config) return;
     setIsSaving(true);
@@ -794,6 +808,17 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-bold text-zinc-100">Configuración Global</h3>
                   <div className="flex items-center gap-4">
+                    <button 
+                      onClick={() => {
+                        if (confirm("¿Estás seguro de borrar el caché de mensajes? El bot volverá a revisar los últimos mensajes configurados como si fueran nuevos.")) {
+                          handleClearCache();
+                        }
+                      }}
+                      className="flex items-center gap-2 px-6 py-2.5 bg-amber-600/20 text-amber-500 border border-amber-600/50 rounded-lg font-bold text-sm hover:bg-amber-600 hover:text-white transition-all"
+                    >
+                      <RefreshCw size={16} />
+                      Borrar Caché de Mensajes
+                    </button>
                     <button 
                       onClick={handleLogoutBot}
                       className="flex items-center gap-2 px-6 py-2.5 bg-rose-600/20 text-rose-500 border border-rose-600/50 rounded-lg font-bold text-sm hover:bg-rose-600 hover:text-white transition-all"
