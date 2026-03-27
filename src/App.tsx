@@ -310,6 +310,17 @@ export default function App() {
     }
   };
 
+  const handleLogoutBot = async () => {
+    try {
+      const res = await fetch('/api/bot/logout', { method: 'POST' });
+      const data = await res.json();
+      toast.success(data.message || "Sesión eliminada.");
+      fetchStatus();
+    } catch (e) {
+      toast.error("Error al cerrar sesión");
+    }
+  };
+
   const handleSaveConfig = async () => {
     if (!config) return;
     setIsSaving(true);
@@ -773,14 +784,23 @@ export default function App() {
               >
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-bold text-zinc-100">Configuración Global</h3>
-                  <button 
-                    onClick={handleSaveConfig}
-                    disabled={isSaving}
-                    className="flex items-center gap-2 px-6 py-2.5 bg-zinc-100 text-black rounded-lg font-bold text-sm hover:bg-white transition-all disabled:opacity-50"
-                  >
-                    {isSaving ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                    Guardar Cambios
-                  </button>
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={handleLogoutBot}
+                      className="flex items-center gap-2 px-6 py-2.5 bg-rose-600/20 text-rose-500 border border-rose-600/50 rounded-lg font-bold text-sm hover:bg-rose-600 hover:text-white transition-all"
+                    >
+                      <LogOut size={16} />
+                      Cerrar Sesión WA
+                    </button>
+                    <button 
+                      onClick={handleSaveConfig}
+                      disabled={isSaving}
+                      className="flex items-center gap-2 px-6 py-2.5 bg-zinc-100 text-black rounded-lg font-bold text-sm hover:bg-white transition-all disabled:opacity-50"
+                    >
+                      {isSaving ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                      Guardar Cambios
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

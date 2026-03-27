@@ -9,6 +9,17 @@ import os from "os";
 import { startBot, stopBot, botStatus, currentQrCode, logs, getStats, getConfig, saveConfig } from "./bot.js";
 import * as db from "./db.js";
 
+// Global error handlers to prevent server crashes
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+  // We don't exit the process to keep the server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
+  // We don't exit the process to keep the server running
+});
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -80,6 +91,20 @@ async function startServer() {
   app.post("/api/bot/stop", async (req, res) => {
     await stopBot();
     res.json({ success: true, message: "Deteniendo bot..." });
+  });
+
+  app.post("/api/bot/logout", async (req, res) => {
+    await stopBot();
+    const sessionPath = path.join(process.cwd(), 'bot_data', 'session');
+    if (fs.existsSync(sessionPath)) {
+      try {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        console.log("Sesión eliminada correctamente.");
+      } catch (e) {
+        console.error("Error al eliminar la sesión:", e);
+      }
+    }
+    res.json({ success: true, message: "Sesión eliminada. Escanea el QR nuevamente." });
   });
 
   // Audit API Routes

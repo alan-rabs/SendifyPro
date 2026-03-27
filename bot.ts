@@ -349,15 +349,20 @@ function replacePlaceholders(template: string, originalText: string, nss: string
 
 export async function stopBot() {
   if (!client) {
+    botStatus = 'stopped';
+    currentQrCode = null;
     log('WARN', 'El bot ya está detenido.');
     return;
   }
   log('INFO', 'Deteniendo el bot de WhatsApp...');
   try {
-    await client.destroy();
+    const oldClient = client;
     client = null;
     botStatus = 'stopped';
     currentQrCode = null;
+    oldClient.destroy().catch((err: any) => {
+      log('ERROR', `Error al destruir el cliente: ${err.message}`);
+    });
     log('INFO', 'Bot detenido correctamente.');
   } catch (err: any) {
     log('ERROR', `Error al detener el bot: ${err.message}`);
