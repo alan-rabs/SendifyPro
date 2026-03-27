@@ -8,6 +8,8 @@ import crypto from 'crypto';
 import cron from 'node-cron';
 import { createRequire } from 'module';
 import * as db from './db.js';
+import { getAuditLogs } from './db.js';
+// import { getAuditLogs } from './db.js'; // Commented out to avoid circular dependency
 
 import { PDFParse } from 'pdf-parse';
 const require = createRequire(import.meta.url);
@@ -80,7 +82,14 @@ export function getConfig() {
 }
 
 export function getStats() {
-  return db.getStats();
+  try {
+    const stats = db.getStats();
+    stats.recentEvents = db.getAuditLogs(5);
+    return stats;
+  } catch (e) {
+    console.error("Error in getStats (bot.ts):", e);
+    return { processedPdfs: 0, emailsSent: 0, errorsDetected: 0, recentFiles: [], recentEvents: [], lastEmailError: '', lastProcessedFile: 'Ninguno' };
+  }
 }
 
 // Logger
@@ -509,7 +518,7 @@ async function queueOrSendEmail(
     if (attachment) {
       const tempDir = path.join(DATA_DIR, 'temp_attachments');
       if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-      const tempPath = path.join(tempDir, `${Date.now()}_${attachment.filename}`);
+      const tempPath = path.join(tempDir, `${Date.now()}_${attachment.filename.replace(/[:\\/*?"<>|]/g, '_')}`);
       fs.writeFileSync(tempPath, attachment.content);
       attachmentInfo = { filename: attachment.filename, path: tempPath };
     }
@@ -653,6 +662,7 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
       host: config.smtpServer,
       port: config.smtpPort,
       secure: config.smtpPort === 465,
+      requireTLS: config.smtpPort !== 465,
       auth: {
         user: config.emailUser,
         pass: config.emailPass

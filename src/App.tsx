@@ -44,6 +44,8 @@ interface Stats {
   errorsDetected: number;
   lastProcessedFile?: string;
   lastEmailError?: string;
+  recentFiles?: string[];
+  recentEvents?: any[];
 }
 
 interface BotStatus {
@@ -246,6 +248,7 @@ export default function App() {
       if (!res.ok) throw new Error(`Status API: ${res.status}`);
       const data = await res.json();
       setStatus(data);
+      setError(null);
     } catch (e: any) {
       console.error("Error fetching status", e);
       setError(prev => prev ? `${prev} | ${e.message}` : e.message);
@@ -873,8 +876,23 @@ export default function App() {
                     isExpanded={expandedStatCard === 'Eventos Detectados'}
                     onToggle={() => setExpandedStatCard(expandedStatCard === 'Eventos Detectados' ? null : 'Eventos Detectados')}
                   >
-                    <div className="space-y-2">
+                    <div className="space-y-4">
                       <p className="text-xs text-zinc-400">Total de coincidencias con reglas que resultaron en una acción (Email o WhatsApp).</p>
+                      
+                      {status?.stats.recentEvents && status.stats.recentEvents.length > 0 && (
+                        <div className="flex flex-col py-2 border-t border-zinc-800/50">
+                          <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2">Eventos Recientes</span>
+                          <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                            {status.stats.recentEvents.map((event: any, idx: number) => (
+                              <div key={idx} className="flex items-center gap-2 text-[11px] text-zinc-400 truncate">
+                                <AlertTriangle size={10} className="shrink-0 text-rose-600" />
+                                <span className="truncate">{event.action_type} - {event.phone_number}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <button 
                         onClick={() => setActiveTab('audit')}
                         className="text-xs text-rose-400 hover:text-rose-300 underline"

@@ -54,21 +54,33 @@ async function startServer() {
       }
     } catch (e) {}
 
-    res.json({
-      status: botStatus, // 'stopped', 'starting', 'awaiting_qr', 'running', 'error'
-      qrCode: currentQrCode,
-      stats: getStats(),
-      version: version,
-      system: {
-        cpuLoad: os.loadavg(),
-        totalMem: os.totalmem(),
-        freeMem: os.freemem(),
-        uptime: os.uptime(),
-        platform: os.platform(),
-        arch: os.arch()
-      },
-      emailQueue: db.getEmailQueue()
-    });
+    try {
+      res.json({
+        status: botStatus, // 'stopped', 'starting', 'awaiting_qr', 'running', 'error'
+        qrCode: currentQrCode,
+        stats: (() => {
+          try {
+            return getStats();
+          } catch (e) {
+            console.error("Error in getStats:", e);
+            return { processedPdfs: 0, emailsSent: 0, errorsDetected: 0, recentFiles: [], recentEvents: [], lastEmailError: '', lastProcessedFile: 'Ninguno' };
+          }
+        })(),
+        version: version,
+        system: {
+          cpuLoad: os.loadavg(),
+          totalMem: os.totalmem(),
+          freeMem: os.freemem(),
+          uptime: os.uptime(),
+          platform: os.platform(),
+          arch: os.arch()
+        },
+        emailQueue: db.getEmailQueue()
+      });
+    } catch (e: any) {
+      console.error("Error in res.json:", e);
+      res.status(500).json({ error: "Internal Server Error", details: e.message });
+    }
   });
 
   app.get("/api/logs", (req, res) => {

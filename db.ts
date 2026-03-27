@@ -231,27 +231,36 @@ export function setConfig(config: any) {
 
 // Stats Helpers
 export function getStats() {
-  const rows = db.prepare('SELECT key, value FROM stats').all() as any[];
-  const stats: any = { processedPdfs: 0, emailsSent: 0, errorsDetected: 0 };
-  rows.forEach(row => {
-    stats[row.key] = row.value;
-  });
-  
-  // Add last processed file to stats
-  const lastFile = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_processed_file') as any;
-  stats.lastProcessedFile = lastFile ? lastFile.value : 'Ninguno';
-  
-  const recentFiles = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_processed_files') as any;
-  try {
-    stats.recentFiles = recentFiles ? JSON.parse(recentFiles.value) : [];
-  } catch (e) {
-    stats.recentFiles = [];
+  if (!db) {
+    console.error("db is not initialized");
+    throw new Error("Database not initialized");
   }
-  
-  const lastError = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_email_error') as any;
-  stats.lastEmailError = lastError ? lastError.value : '';
-  
-  return stats;
+  try {
+    const rows = db.prepare('SELECT key, value FROM stats').all() as any[];
+    const stats: any = { processedPdfs: 0, emailsSent: 0, errorsDetected: 0 };
+    rows.forEach(row => {
+      stats[row.key] = row.value;
+    });
+    
+    // Add last processed file to stats
+    const lastFile = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_processed_file') as any;
+    stats.lastProcessedFile = lastFile ? lastFile.value : 'Ninguno';
+    
+    const recentFiles = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_processed_files') as any;
+    try {
+      stats.recentFiles = recentFiles ? JSON.parse(recentFiles.value) : [];
+    } catch (e) {
+      stats.recentFiles = [];
+    }
+    
+    const lastError = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_email_error') as any;
+    stats.lastEmailError = lastError ? lastError.value : '';
+    
+    return stats;
+  } catch (e) {
+    console.error("Error in db.getStats:", e);
+    throw e;
+  }
 }
 
 export function incrementStat(key: string) {
@@ -320,23 +329,33 @@ export function addAuditLog(log: any) {
 }
 
 export function getAuditLogs(limit = 1000) {
-  return db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all();
+  try {
+    return db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all(limit);
+  } catch (e) {
+    console.error("Error in getAuditLogs:", e);
+    return [];
+  }
 }
 
 // Email Queue Helpers
 export function getEmailQueue() {
-  const rows = db.prepare('SELECT * FROM email_queue').all() as any[];
-  return rows.map(row => ({
-    id: row.id,
-    timestamp: row.timestamp,
-    caseType: row.case_type,
-    subject: row.subject,
-    body: row.body,
-    to: row.target_to,
-    cc: row.cc,
-    bcc: row.bcc,
-    attachment: row.attachment_path ? { filename: row.attachment_filename, path: row.attachment_path } : null
-  }));
+  try {
+    const rows = db.prepare('SELECT * FROM email_queue').all() as any[];
+    return rows.map(row => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      caseType: row.case_type,
+      subject: row.subject,
+      body: row.body,
+      to: row.target_to,
+      cc: row.cc,
+      bcc: row.bcc,
+      attachment: row.attachment_path ? { filename: row.attachment_filename, path: row.attachment_path } : null
+    }));
+  } catch (e) {
+    console.error("Error in getEmailQueue:", e);
+    return [];
+  }
 }
 
 export function addToEmailQueue(item: any) {
