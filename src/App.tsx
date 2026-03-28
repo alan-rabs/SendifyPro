@@ -208,6 +208,16 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const hasInitializedSidebar = useRef(false);
+
+  useEffect(() => {
+    if (status && !hasInitializedSidebar.current) {
+      if (status.status === 'running' || status.status === 'starting') {
+        setIsSidebarCollapsed(true);
+      }
+      hasInitializedSidebar.current = true;
+    }
+  }, [status]);
   const [areStatCardsExpanded, setAreStatCardsExpanded] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -325,6 +335,7 @@ export default function App() {
     try {
       await fetch('/api/bot/start', { method: 'POST' });
       toast.success("Iniciando bot...");
+      setIsSidebarCollapsed(true);
       fetchStatus();
     } catch (e) {
       toast.error("Error al iniciar el bot");
@@ -335,6 +346,7 @@ export default function App() {
     try {
       await fetch('/api/bot/stop', { method: 'POST' });
       toast.success("Deteniendo bot...");
+      setIsSidebarCollapsed(false);
       fetchStatus();
     } catch (e) {
       toast.error("Error al detener el bot");
@@ -524,7 +536,7 @@ export default function App() {
         <div className="fixed inset-0 z-[9999] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
           <div className="w-20 h-20 border-4 border-zinc-700 border-t-zinc-100 rounded-full animate-spin mb-8" />
           <h2 className="text-2xl font-bold text-white mb-4">Actualizando Sendify PRO</h2>
-          <p className="text-zinc-400 max-w-md leading-relaxed">{updateProgress}</p>
+          <p className="text-zinc-400 leading-relaxed">{updateProgress}</p>
           <p className="mt-8 text-xs text-zinc-500 uppercase tracking-widest animate-pulse">No cierres esta ventana</p>
           <button 
             onClick={() => window.close()}
@@ -687,7 +699,7 @@ export default function App() {
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className="min-h-screen"
       >
-        <header className="h-20 border-b border-zinc-900 flex items-center justify-between px-8 bg-black/50 backdrop-blur-md sticky top-0 z-40">
+        <header className="h-20 border-b border-zinc-900 flex items-center justify-between px-4 bg-black/50 backdrop-blur-md sticky top-0 z-40">
           <div>
             <h2 className="text-xl font-bold text-zinc-100 capitalize">{activeTab}</h2>
             <p className="text-xs text-zinc-500">{status?.version || 'v8.0.0'}</p>
@@ -700,14 +712,14 @@ export default function App() {
           </div>
         </header>
 
-        <main className="p-8 max-w-7xl mx-auto">
+        <main className="p-4 w-full">
           {!config || !status ? (
             <div className="flex flex-col items-center justify-center py-40 space-y-4">
               <RefreshCw size={48} className={`text-zinc-800 ${error ? '' : 'animate-spin'}`} />
               <div className="text-center">
                 <p className="text-zinc-500 font-medium animate-pulse">Cargando sistema...</p>
                 {error && (
-                  <div className="mt-4 p-4 bg-rose-900/20 border border-rose-500/30 rounded-lg max-w-md">
+                  <div className="mt-4 p-4 bg-rose-900/20 border border-rose-500/30 rounded-lg">
                     <p className="text-rose-500 text-xs font-mono break-all">{error}</p>
                   </div>
                 )}
@@ -1794,7 +1806,7 @@ export default function App() {
                                   {log.nss && <div>NSS: {log.nss}</div>}
                                   {log.curp && <div>CURP: {log.curp}</div>}
                                 </td>
-                                <td className="px-4 py-3 max-w-xs truncate text-zinc-500" title={log.message || log.error}>
+                                <td className="px-4 py-3 text-zinc-500" title={log.message || log.error}>
                                   {log.message || log.error}
                                 </td>
                               </tr>
