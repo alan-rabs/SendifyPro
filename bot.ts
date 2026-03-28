@@ -84,11 +84,10 @@ export function getConfig() {
 export function getStats() {
   try {
     const stats = db.getStats();
-    stats.recentEvents = db.getAuditLogs(5);
     return stats;
   } catch (e) {
     console.error("Error in getStats (bot.ts):", e);
-    return { processedPdfs: 0, emailsSent: 0, errorsDetected: 0, recentFiles: [], recentEvents: [], lastEmailError: '', lastProcessedFile: 'Ninguno' };
+    return { processedPdfs: 0, emailsSent: 0, errorsDetected: 0, recentFiles: [], recentEvents: [], recentEmails: [], emailQueue: [], lastEmailError: '', lastProcessedFile: 'Ninguno' };
   }
 }
 
@@ -438,15 +437,16 @@ async function processMessage(msg: any): Promise<boolean> {
 
         if (emailSent || waSent) {
           didProcessSomething = true;
-          if (emailSent) {
-            db.incrementStat('emailsSent');
-            // Note: emailsSentToday is incremented inside queueOrSendEmail or sendEmail to avoid double counting
-          }
-          
-          // Increment "Eventos Detectados" for any action taken
-          db.incrementStat('errorsDetected');
-
           logAudit(chat.name, rule.name, nss, curp, textContent.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
+        }
+
+        if (processingError) {
+          db.incrementStat('errorsDetected');
+          db.addRecentError({
+            timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+            action_type: rule.name,
+            error: `Fallo en acción de regla: ${rule.name}`
+          });
         }
 
         if (chatConfig.processingMode === 'simple') {
@@ -544,7 +544,7 @@ async function queueOrSendEmail(
     return true; // Assume success for queueing
   } else {
     // Send immediately
-    return await sendEmail(subject, text, attachment ? [attachment] : null, customTargets, bcc, cc, false);
+    return await sendEmail(subject, text, attachment ? [attachment] : null, customTargets, bcc, cc, false, caseType);
   }
 }
 
@@ -581,11 +581,17 @@ async function processEmailQueue() {
        }
     });
 
-    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true);
+    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true, first.caseType);
     if (sent) {
       log('INFO', `✅ Lote de ${items.length} correos enviado a ${first.to}`);
     } else {
       log('ERROR', `❌ Error enviando lote a ${first.to}`);
+      db.incrementStat('errorsDetected');
+      db.addRecentError({
+        timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+        action_type: 'Envío de Lote',
+        error: `Fallo al enviar lote de ${items.length} correos a ${first.to}`
+      });
     }
   }
 
@@ -625,7 +631,7 @@ setInterval(() => {
   }
 }, 30000); // Check every 30 seconds
 
-async function sendEmail(subject: string, text: string, attachments: { filename: string, content: Buffer }[] | null, customTargets?: string, bcc?: string, cc?: string, isBatch: boolean = false) {
+async function sendEmail(subject: string, text: string, attachments: { filename: string, content: Buffer }[] | null, customTargets?: string, bcc?: string, cc?: string, isBatch: boolean = false, ruleName: string = 'General') {
   if (!config.emailUser || !config.emailPass) {
     log('ERROR', 'Faltan credenciales de correo en la configuración.');
     return false;
@@ -702,12 +708,23 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
     // Clear last error if successful
     db.setMetadata('last_email_error', '');
     
+    // Increment total emails sent
+    db.incrementStat('emailsSent');
+    
     // Increment counter if not already incremented by queueing
     if (!isBatch) {
       db.incrementEmailSentToday();
       // We also update local config to keep it in sync for immediate next checks
       config.emailsSentToday = (config.emailsSentToday || 0) + 1;
     }
+    
+    // Add to recent emails
+    db.addRecentEmail({
+      time: new Date().toISOString(),
+      subject: subject,
+      attachments: attachments ? attachments.length : 0,
+      rule: ruleName
+    });
     
     log('INFO', `✅ Correo enviado exitosamente a ${targets.join(', ')}. (${config.emailsSentToday}/${limit} hoy)`);
     
@@ -716,6 +733,11 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
     const errorMsg = `Error SMTP: ${err.message}`;
     log('ERROR', errorMsg);
     db.setMetadata('last_email_error', errorMsg);
+    db.addRecentError({
+      timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+      action_type: 'SMTP Error',
+      error: errorMsg
+    });
     return false;
   }
 }
@@ -863,3 +885,11 @@ setInterval(async () => {
     });
   }
 }, 60000); // Revisar cada minuto
+
+// Reiniciar estadísticas diarias a medianoche
+cron.schedule('0 0 * * *', () => {
+  log('INFO', 'Ejecutando reinicio de estadísticas diarias...');
+  db.resetDailyStats();
+}, {
+  timezone: "America/Mexico_City"
+});

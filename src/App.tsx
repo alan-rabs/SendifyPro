@@ -46,6 +46,8 @@ interface Stats {
   lastEmailError?: string;
   recentFiles?: string[];
   recentEvents?: any[];
+  recentEmails?: any[];
+  emailQueue?: any[];
 }
 
 interface BotStatus {
@@ -164,7 +166,7 @@ const Card = ({ children, title, icon: Icon, className = "", action }: { childre
   </div>
 );
 
-const StatCard = ({ label, value, icon: Icon, colorClass, children, isExpanded, onToggle }: { label: string, value: number | string, icon: any, colorClass: string, children?: React.ReactNode, isExpanded?: boolean, onToggle?: () => void }) => (
+const StatCard = ({ label, value, icon: Icon, colorClass, children, isExpanded }: { label: string, value: number | string, icon: any, colorClass: string, children?: React.ReactNode, isExpanded?: boolean }) => (
   <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden flex flex-col">
     <div className="p-4 flex items-center justify-between">
       <div className="flex items-center gap-4">
@@ -176,19 +178,6 @@ const StatCard = ({ label, value, icon: Icon, colorClass, children, isExpanded, 
           <p className="text-2xl font-mono font-bold text-zinc-100">{value}</p>
         </div>
       </div>
-      {children && (
-        <button 
-          onClick={onToggle}
-          className="p-2 text-zinc-500 hover:text-zinc-300 transition-colors rounded-lg hover:bg-zinc-800"
-        >
-          <motion.div
-            animate={{ rotate: isExpanded ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <ChevronDown size={20} />
-          </motion.div>
-        </button>
-      )}
     </div>
     <AnimatePresence>
       {isExpanded && children && (
@@ -219,7 +208,7 @@ export default function App() {
   const [isSaving, setIsSaving] = useState(false);
   const [expandedChat, setExpandedChat] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [expandedStatCard, setExpandedStatCard] = useState<string | null>(null);
+  const [areStatCardsExpanded, setAreStatCardsExpanded] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateProgress, setUpdateProgress] = useState("");
@@ -752,15 +741,26 @@ export default function App() {
                 className="space-y-8"
               >
                 {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <StatCard 
-                    label="Archivos Procesados" 
-                    value={status?.stats.processedPdfs || 0} 
-                    icon={FileText} 
-                    colorClass="bg-blue-500"
-                    isExpanded={expandedStatCard === 'Archivos Procesados'}
-                    onToggle={() => setExpandedStatCard(expandedStatCard === 'Archivos Procesados' ? null : 'Archivos Procesados')}
-                  >
+                <div className="space-y-4">
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => setAreStatCardsExpanded(!areStatCardsExpanded)}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 rounded-lg transition-colors"
+                    >
+                      {areStatCardsExpanded ? 'Ocultar Detalles' : 'Ver Detalles'}
+                      <motion.div animate={{ rotate: areStatCardsExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+                        <ChevronDown size={14} />
+                      </motion.div>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <StatCard 
+                      label="Archivos Procesados" 
+                      value={status?.stats.processedPdfs || 0} 
+                      icon={FileText} 
+                      colorClass="bg-blue-500"
+                      isExpanded={areStatCardsExpanded}
+                    >
                     <div className="space-y-4">
                       <div className="flex flex-col py-2 border-b border-zinc-800/50">
                         <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-1">Último Archivo</span>
@@ -800,8 +800,7 @@ export default function App() {
                     value={status?.stats.emailsSent || 0} 
                     icon={Mail} 
                     colorClass="bg-emerald-500"
-                    isExpanded={expandedStatCard === 'Correos Enviados'}
-                    onToggle={() => setExpandedStatCard(expandedStatCard === 'Correos Enviados' ? null : 'Correos Enviados')}
+                    isExpanded={areStatCardsExpanded}
                   >
                     <div className="space-y-4">
                       {status?.stats.lastEmailError && (
@@ -823,37 +822,27 @@ export default function App() {
 
                       {config?.emailBatchingEnabled && (
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-zinc-500 uppercase font-bold">Cola de Envío</span>
-                            <span className="text-[10px] font-mono text-zinc-400">
-                              {status?.emailQueue?.length || 0} / {config.emailBatchLimit || 20}
-                            </span>
-                          </div>
-                          
-                          <div className="max-h-40 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                            {(status?.emailQueue || []).map((item, idx) => (
-                              <div key={idx} className="p-2 bg-zinc-950 border border-zinc-800 rounded text-[9px]">
-                                <div className="flex justify-between items-start mb-1">
-                                  <span className="font-bold text-zinc-300 truncate max-w-[120px]">{item.caseType}</span>
-                                  <span className="text-zinc-500">{new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          <div className="flex flex-col py-2 border-b border-zinc-800/50">
+                            <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2">Cola de Envío</span>
+                            <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                              {Object.entries((status?.stats?.emailQueue || []).reduce((acc: any, item: any) => {
+                                acc[item.caseType] = (acc[item.caseType] || 0) + 1;
+                                return acc;
+                              }, {})).map(([rule, count]: [string, any], idx: number) => (
+                                <div key={idx} className="flex justify-between items-center text-[11px]">
+                                  <span className="text-zinc-400 truncate pr-2">{rule}</span>
+                                  <span className="text-zinc-300 font-mono font-bold bg-zinc-800 px-1.5 py-0.5 rounded">{count} / {config.emailBatchLimit || 20}</span>
                                 </div>
-                                <div className="text-zinc-400 truncate mb-1">{item.to}</div>
-                                {item.attachment && (
-                                  <div className="flex items-center gap-1 text-blue-400 italic">
-                                    <FileText size={8} />
-                                    <span className="truncate">{item.attachment.filename}</span>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                            {(status?.emailQueue || []).length === 0 && (
-                              <div className="py-4 text-center text-[10px] text-zinc-600 italic">
-                                Cola vacía
-                              </div>
-                            )}
+                              ))}
+                              {(status?.stats?.emailQueue || []).length === 0 && (
+                                <div className="text-[10px] text-zinc-600 italic">
+                                  Cola vacía
+                                </div>
+                              )}
+                            </div>
                           </div>
 
-                          <div className="pt-2 border-t border-zinc-800/50">
+                          <div className="pt-2 border-b border-zinc-800/50 pb-3">
                             <p className="text-[9px] text-zinc-500 mb-1">Horarios programados:</p>
                             <div className="flex flex-wrap gap-1.5">
                               {(config.emailSchedules || []).filter(Boolean).map((t, i) => (
@@ -866,27 +855,50 @@ export default function App() {
                           </div>
                         </div>
                       )}
+
+                      {status?.stats?.recentEmails && status.stats.recentEmails.length > 0 && (
+                        <div className="flex flex-col py-2">
+                          <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2">Últimos Correos</span>
+                          <div className="space-y-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
+                            {status.stats.recentEmails.map((email: any, idx: number) => (
+                              <div key={idx} className="p-2 bg-zinc-950 border border-zinc-800/50 rounded-lg text-[10px]">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="font-bold text-emerald-400 truncate pr-2">{email.rule}</span>
+                                  <span className="text-zinc-500 shrink-0">{new Date(email.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                                <div className="text-zinc-300 truncate mb-1" title={email.subject}>{email.subject}</div>
+                                <div className="flex items-center gap-1 text-zinc-500">
+                                  <FileText size={10} />
+                                  <span>{email.attachments} adjunto(s)</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </StatCard>
                   <StatCard 
-                    label="Eventos Detectados" 
+                    label="Errores Detectados" 
                     value={status?.stats.errorsDetected || 0} 
                     icon={AlertTriangle} 
                     colorClass="bg-rose-500"
-                    isExpanded={expandedStatCard === 'Eventos Detectados'}
-                    onToggle={() => setExpandedStatCard(expandedStatCard === 'Eventos Detectados' ? null : 'Eventos Detectados')}
+                    isExpanded={areStatCardsExpanded}
                   >
                     <div className="space-y-4">
-                      <p className="text-xs text-zinc-400">Total de coincidencias con reglas que resultaron en una acción (Email o WhatsApp).</p>
+                      <p className="text-xs text-zinc-400">Total de errores detectados durante el procesamiento de mensajes y envío de correos.</p>
                       
                       {status?.stats.recentEvents && status.stats.recentEvents.length > 0 && (
                         <div className="flex flex-col py-2 border-t border-zinc-800/50">
-                          <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2">Eventos Recientes</span>
+                          <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider mb-2">Errores Recientes</span>
                           <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
                             {status.stats.recentEvents.map((event: any, idx: number) => (
-                              <div key={idx} className="flex items-center gap-2 text-[11px] text-zinc-400 truncate">
-                                <AlertTriangle size={10} className="shrink-0 text-rose-600" />
-                                <span className="truncate">{event.action_type} - {event.phone_number}</span>
+                              <div key={idx} className="flex flex-col gap-1 p-2 bg-zinc-950 border border-zinc-800/50 rounded-lg text-[10px]">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-rose-400">{event.action_type || 'Error'}</span>
+                                  <span className="text-zinc-500">{event.timestamp}</span>
+                                </div>
+                                <span className="text-zinc-300 truncate" title={event.error}>{event.error}</span>
                               </div>
                             ))}
                           </div>
@@ -901,6 +913,7 @@ export default function App() {
                       </button>
                     </div>
                   </StatCard>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

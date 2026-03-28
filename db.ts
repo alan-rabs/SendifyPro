@@ -256,10 +256,56 @@ export function getStats() {
     const lastError = db.prepare('SELECT value FROM metadata WHERE key = ?').get('last_email_error') as any;
     stats.lastEmailError = lastError ? lastError.value : '';
     
+    const recentEmails = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_emails') as any;
+    try {
+      stats.recentEmails = recentEmails ? JSON.parse(recentEmails.value) : [];
+    } catch (e) {
+      stats.recentEmails = [];
+    }
+    
+    const recentErrors = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_errors') as any;
+    try {
+      stats.recentEvents = recentErrors ? JSON.parse(recentErrors.value) : [];
+    } catch (e) {
+      stats.recentEvents = [];
+    }
+    
+    stats.emailQueue = getEmailQueue();
+    
     return stats;
   } catch (e) {
     console.error("Error in db.getStats:", e);
     throw e;
+  }
+}
+
+export function addRecentError(errorData: any) {
+  try {
+    const row = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_errors') as any;
+    let recent = [];
+    if (row && row.value) {
+      recent = JSON.parse(row.value);
+    }
+    recent.unshift(errorData);
+    if (recent.length > 5) recent = recent.slice(0, 5);
+    setMetadata('recent_errors', JSON.stringify(recent));
+  } catch (e) {
+    console.error("Error adding recent error:", e);
+  }
+}
+
+export function addRecentEmail(emailData: any) {
+  try {
+    const row = db.prepare('SELECT value FROM metadata WHERE key = ?').get('recent_emails') as any;
+    let recent = [];
+    if (row && row.value) {
+      recent = JSON.parse(row.value);
+    }
+    recent.unshift(emailData);
+    if (recent.length > 5) recent = recent.slice(0, 5);
+    setMetadata('recent_emails', JSON.stringify(recent));
+  } catch (e) {
+    console.error("Error adding recent email:", e);
   }
 }
 
@@ -286,6 +332,15 @@ export function isMessageProcessed(id: string) {
 
 export function markMessageProcessed(id: string) {
   db.prepare('INSERT OR IGNORE INTO processed_messages (id) VALUES (?)').run(id);
+}
+
+export function resetDailyStats() {
+  db.prepare('DELETE FROM stats').run();
+  const config = getConfig();
+  if (config) {
+    config.emailsSentToday = 0;
+    setConfig(config);
+  }
 }
 
 export function clearProcessedMessagesCache() {
@@ -326,6 +381,15 @@ export function addAuditLog(log: any) {
     INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(log.timestamp, log.phoneNumber, log.actionType, log.nss, log.curp, log.message, log.error);
+}
+
+export function getErrorLogs(limit = 10) {
+  try {
+    return db.prepare("SELECT * FROM audit_logs WHERE error != '' AND error IS NOT NULL ORDER BY id DESC LIMIT ?").all(limit);
+  } catch (e) {
+    console.error("Error in getErrorLogs:", e);
+    return [];
+  }
 }
 
 export function getAuditLogs(limit = 1000) {
