@@ -214,6 +214,28 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const hasInitializedSidebar = useRef(false);
 
+  const [statsStartDate, setStatsStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [statsEndDate, setStatsEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [auditStats, setAuditStats] = useState<{total: number, email: number, whatsapp: number} | null>(null);
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/audit/stats?startDate=${statsStartDate}&endDate=${statsEndDate}`);
+      if (response.ok) {
+        const data = await response.json();
+        setAuditStats(data);
+      }
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  }, [statsStartDate, statsEndDate]);
+
+  useEffect(() => {
+    if (activeTab === 'audit') {
+      fetchStats();
+    }
+  }, [activeTab, fetchStats]);
+
   useEffect(() => {
     if (status && !hasInitializedSidebar.current) {
       if (status.status === 'running' || status.status === 'starting') {
@@ -1709,6 +1731,46 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
+                <Card title="Estadísticas de Auditoría" icon={Activity} className="border-emerald-500/20">
+                  <div className="space-y-6">
+                    <div className="flex flex-wrap items-end gap-4 p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
+                      <div className="flex-1 min-w-[150px]">
+                        <label className="block text-xs font-bold text-zinc-400 mb-1">Fecha Inicio</label>
+                        <input type="date" value={statsStartDate} onChange={(e) => setStatsStartDate(e.target.value)} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2 text-sm text-white" />
+                      </div>
+                      <div className="flex-1 min-w-[150px]">
+                        <label className="block text-xs font-bold text-zinc-400 mb-1">Fecha Fin</label>
+                        <input type="date" value={statsEndDate} onChange={(e) => setStatsEndDate(e.target.value)} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2 text-sm text-white" />
+                      </div>
+                      <button onClick={fetchStats} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold text-sm hover:bg-emerald-500 transition-all">Consultar</button>
+                    </div>
+
+                    {auditStats && (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl">
+                          <h5 className="text-xs font-bold text-zinc-400">Total Envíos</h5>
+                          <p className="text-2xl font-bold text-white">{auditStats.total}</p>
+                        </div>
+                        <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl">
+                          <h5 className="text-xs font-bold text-zinc-400">Envíos Email</h5>
+                          <p className="text-2xl font-bold text-emerald-400">{auditStats.email}</p>
+                        </div>
+                        <div className="bg-zinc-950 border border-zinc-800 p-4 rounded-xl">
+                          <h5 className="text-xs font-bold text-zinc-400">Envíos WhatsApp</h5>
+                          <p className="text-2xl font-bold text-emerald-400">{auditStats.whatsapp}</p>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <button 
+                      onClick={() => window.open('/api/audit/export', '_blank')}
+                      className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-zinc-800 text-white rounded-lg font-bold text-sm hover:bg-zinc-700 transition-all"
+                    >
+                      <Download size={18} /> Descargar Reporte Completo (CSV)
+                    </button>
+                  </div>
+                </Card>
+
                 <Card title="Plantillas de Reportes Automáticos" icon={Plus} className="border-emerald-500/20">
                   <div className="space-y-6">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-xl">

@@ -143,6 +143,28 @@ async function startServer() {
     }
   });
 
+  app.get("/api/audit/stats", (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      const logs = db.getAuditLogs(10000); // Obtener todos los logs para filtrar
+      
+      const filteredLogs = logs.filter((log: any) => {
+        const logDate = new Date(log.timestamp);
+        return logDate >= new Date(startDate as string) && logDate <= new Date(endDate as string);
+      });
+
+      const stats = {
+        total: filteredLogs.length,
+        email: filteredLogs.filter((l: any) => l.error === 'email').length,
+        whatsapp: filteredLogs.filter((l: any) => l.action_type.includes('WhatsApp')).length,
+      };
+      
+      res.json(stats);
+    } catch (e) {
+      res.status(500).json({ error: "Error al calcular estadísticas" });
+    }
+  });
+
   app.get("/api/audit/export", (req, res) => {
     try {
       const logs = db.getAuditLogs(5000);
