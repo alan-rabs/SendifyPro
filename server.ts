@@ -39,19 +39,15 @@ async function startServer() {
 
   // API Routes
   app.get("/api/status", (req, res) => {
-    let version = "8.0.0";
+    let version = "8.7.0";
     try {
       const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf-8'));
       if (packageJson.version) version = packageJson.version;
       
-      // Auto-versioning based on Git commits
-      try {
-        const buildNumber = execSync('git rev-list --count HEAD', { stdio: 'pipe' }).toString().trim();
-        const shortHash = execSync('git rev-parse --short HEAD', { stdio: 'pipe' }).toString().trim();
-        version = `${version} (Build ${buildNumber} - ${shortHash})`;
-      } catch (gitErr) {
-        // Ignore if git is not available or not a repo
-      }
+      // Auto-versioning based on processed messages to show activity
+      const stats = getStats();
+      const buildNumber = (stats.processedPdfs || 0) + (stats.emailsSent || 0);
+      version = `${version} (Build ${buildNumber})`;
     } catch (e) {}
 
     try {
@@ -106,6 +102,18 @@ async function startServer() {
     res.json({ success: true, message: "Deteniendo bot..." });
   });
 
+  app.post("/api/bot/sweep", async (req, res) => {
+    const { targetDate, targetContact, endDate } = req.body;
+    if (!targetDate) {
+      return res.status(400).json({ success: false, message: "La fecha objetivo es requerida." });
+    }
+    
+    // We import runValidationSweep dynamically to avoid circular dependencies if any
+    const { runValidationSweep } = await import('./bot.js');
+    const result = await runValidationSweep(targetDate, targetContact, endDate);
+    res.json(result);
+  });
+
   app.post("/api/bot/clear-cache", (req, res) => {
     db.clearProcessedMessagesCache();
     res.json({ success: true, message: "Caché de mensajes procesados borrada." });
@@ -138,7 +146,7 @@ async function startServer() {
   app.get("/api/audit/export", (req, res) => {
     try {
       const logs = db.getAuditLogs(5000);
-      let csv = "ID,Timestamp,Teléfono,Acción,NSS,CURP,Mensaje,Error\n";
+      let csv = "ID,Timestamp,Teléfono,Acción,NSS,CURP,Mensaje,Error,Ejecución\n";
       
       logs.forEach((log: any) => {
         const row = [
@@ -149,7 +157,8 @@ async function startServer() {
           log.nss,
           log.curp,
           `"${(log.message || '').replace(/"/g, '""')}"`,
-          `"${(log.error || '').replace(/"/g, '""')}"`
+          `"${(log.error || '').replace(/"/g, '""')}"`,
+          `"${(log.execution_type || 'Tiempo real').replace(/"/g, '""')}"`
         ].join(',');
         csv += row + "\n";
       });
@@ -338,6 +347,7 @@ async function startServer() {
       if (!config.autoUpdateCheckEnabled || !config.githubRepo) return;
 
       const now = new Date();
+      // Adjust for Mexico City timezone if needed, or use local server time
       const currentHour = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
       const targetHour = config.autoUpdateHour || '03:00';
 
@@ -347,9 +357,15 @@ async function startServer() {
       // Check frequency
       const lastCheck = config.lastAutoUpdateCheck ? new Date(config.lastAutoUpdateCheck) : new Date(0);
       const daysSinceLastCheck = Math.floor((now.getTime() - lastCheck.getTime()) / (1000 * 60 * 60 * 24));
+      
+      // If it already ran today, don't run again
+      if (now.getDate() === lastCheck.getDate() && now.getMonth() === lastCheck.getMonth() && now.getFullYear() === lastCheck.getFullYear()) {
+         return;
+      }
 
       let shouldCheck = false;
-      if (config.autoUpdateFrequency === 'daily' && daysSinceLastCheck >= 1) shouldCheck = true;
+      if (!config.autoUpdateFrequency) shouldCheck = true; // Default to daily if not set
+      if (config.autoUpdateFrequency === 'daily') shouldCheck = true;
       if (config.autoUpdateFrequency === 'weekly' && daysSinceLastCheck >= 7) shouldCheck = true;
       if (config.autoUpdateFrequency === 'custom' && daysSinceLastCheck >= (config.autoUpdateCustomDays || 3)) shouldCheck = true;
 

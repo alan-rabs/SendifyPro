@@ -138,6 +138,10 @@ interface Config {
   autoUpdateHour?: string;
   autoUpdateFrequency?: 'daily' | 'weekly' | 'custom';
   autoUpdateCustomDays?: number;
+  validationSweepEnabled?: boolean;
+  validationSweepFrequency?: 'daily' | 'weekly' | 'monthly';
+  validationSweepTime?: string;
+  validationSweepEmailTargets?: string;
   chatConfigs: ChatConfig[];
   auditTemplates?: AuditTemplate[];
 }
@@ -1245,6 +1249,138 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4">
+                  <Card title="Barrido de Validación (Sweep)" icon={Search}>
+                    <div className="space-y-4">
+                      <div className="flex flex-col gap-4 p-4 bg-zinc-950 border border-zinc-800 rounded-lg">
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">Habilitar Barrido Automático</span>
+                            <span className="text-xs text-zinc-500">Busca y reintenta mensajes no procesados</span>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer"
+                              checked={config?.validationSweepEnabled || false}
+                              onChange={e => config && setConfig({...config, validationSweepEnabled: e.target.checked})}
+                            />
+                            <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+                          </label>
+                        </div>
+
+                        {config?.validationSweepEnabled && (
+                          <>
+                            <div className="flex items-center justify-between pt-2 border-t border-zinc-900">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-medium">Frecuencia</span>
+                                <span className="text-xs text-zinc-500">Cada cuánto tiempo ejecutar el barrido</span>
+                              </div>
+                              <select 
+                                value={config?.validationSweepFrequency || 'daily'}
+                                onChange={e => config && setConfig({...config, validationSweepFrequency: e.target.value as any})}
+                                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all"
+                              >
+                                <option value="daily">Diario</option>
+                                <option value="weekly">Semanal</option>
+                                <option value="monthly">Mensual</option>
+                              </select>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-2 border-t border-zinc-900">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-medium">Hora de Ejecución</span>
+                                <span className="text-xs text-zinc-500">Hora del día para realizar el barrido</span>
+                              </div>
+                              <input 
+                                type="time" 
+                                value={config?.validationSweepTime || '02:00'} 
+                                onChange={e => config && setConfig({...config, validationSweepTime: e.target.value})}
+                                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all"
+                              />
+                            </div>
+
+                            <div className="flex flex-col gap-2 pt-2 border-t border-zinc-900">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-medium">Correos para Reporte de Barrido</span>
+                                <span className="text-xs text-zinc-500">Separados por comas (ej. admin@empresa.com, jefe@empresa.com)</span>
+                              </div>
+                              <input 
+                                type="text" 
+                                placeholder="Destinatarios del reporte..."
+                                value={config?.validationSweepEmailTargets || ''} 
+                                onChange={e => config && setConfig({...config, validationSweepEmailTargets: e.target.value})}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                              />
+                            </div>
+                          </>
+                        )}
+
+                        <div className="flex flex-col gap-4 pt-4 border-t border-zinc-900 mt-2">
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium text-purple-400">Ejecutar Barrido Manual</span>
+                            <span className="text-xs text-zinc-500">Ejecuta el barrido de validación inmediatamente para un rango de fechas.</span>
+                          </div>
+                          <div className="flex gap-2 items-center">
+                            <div className="flex flex-col flex-1 gap-1">
+                              <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Desde</span>
+                              <input 
+                                type="date" 
+                                id="manualSweepDate"
+                                defaultValue={new Date().toISOString().split('T')[0]}
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-purple-500 outline-none transition-all"
+                              />
+                            </div>
+                            <div className="flex flex-col flex-1 gap-1">
+                              <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Hasta (Opcional)</span>
+                              <input 
+                                type="date" 
+                                id="manualSweepEndDate"
+                                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-purple-500 outline-none transition-all"
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 justify-end h-full pt-[18px]">
+                              <button 
+                                onClick={async () => {
+                                  const dateInput = document.getElementById('manualSweepDate') as HTMLInputElement;
+                                  const endDateInput = document.getElementById('manualSweepEndDate') as HTMLInputElement;
+                                  if (!dateInput.value) {
+                                    toast.error('Selecciona una fecha de inicio');
+                                    return;
+                                  }
+                                  
+                                  const toastId = toast.loading('Ejecutando barrido de validación...');
+                                  try {
+                                    const res = await fetch('/api/bot/sweep', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ 
+                                        targetDate: dateInput.value,
+                                        endDate: endDateInput.value || undefined
+                                      })
+                                    });
+                                    const data = await res.json();
+                                    if (data.success) {
+                                      toast.success(data.message, { id: toastId });
+                                    } else {
+                                      toast.error(data.message || 'Error al ejecutar el barrido', { id: toastId });
+                                    }
+                                  } catch (err: any) {
+                                    toast.error(`Error: ${err.message}`, { id: toastId });
+                                  }
+                                }}
+                                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-sm transition-all h-[38px]"
+                              >
+                                <Search size={16} /> Ejecutar
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+
+                <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-bold text-zinc-100">Configuración de Chats ({config.chatConfigs.length})</h3>
                     <button 
@@ -1780,13 +1916,14 @@ export default function App() {
                             <th className="px-4 py-3">Teléfono</th>
                             <th className="px-4 py-3">Acción</th>
                             <th className="px-4 py-3">NSS/CURP</th>
+                            <th className="px-4 py-3">Ejecución</th>
                             <th className="px-4 py-3">Mensaje/Error</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-800">
                           {auditLogs.length === 0 ? (
                             <tr>
-                              <td colSpan={5} className="px-4 py-12 text-center text-zinc-600 italic">No se han generado registros de auditoría aún en la base de datos.</td>
+                              <td colSpan={6} className="px-4 py-12 text-center text-zinc-600 italic">No se han generado registros de auditoría aún en la base de datos.</td>
                             </tr>
                           ) : (
                             auditLogs.map((log) => (
@@ -1805,6 +1942,13 @@ export default function App() {
                                 <td className="px-4 py-3 font-mono text-zinc-400">
                                   {log.nss && <div>NSS: {log.nss}</div>}
                                   {log.curp && <div>CURP: {log.curp}</div>}
+                                </td>
+                                <td className="px-4 py-3 text-zinc-300">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    log.execution_type === 'Barrido' ? 'bg-purple-500/10 text-purple-500' : 'bg-zinc-500/10 text-zinc-400'
+                                  }`}>
+                                    {log.execution_type || 'Tiempo real'}
+                                  </span>
                                 </td>
                                 <td className="px-4 py-3 text-zinc-500" title={log.message || log.error}>
                                   {log.message || log.error}

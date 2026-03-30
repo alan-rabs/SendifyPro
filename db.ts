@@ -57,7 +57,9 @@ try {
       nss TEXT,
       curp TEXT,
       message TEXT,
-      error TEXT
+      error TEXT,
+      message_id TEXT,
+      execution_type TEXT DEFAULT 'Tiempo real'
     );
     CREATE TABLE IF NOT EXISTS metadata (
       key TEXT PRIMARY KEY,
@@ -82,6 +84,16 @@ try {
   // Add cc column to email_queue if it doesn't exist
   try {
     db.exec(`ALTER TABLE email_queue ADD COLUMN cc TEXT;`);
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE audit_logs ADD COLUMN message_id TEXT;`);
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE audit_logs ADD COLUMN execution_type TEXT DEFAULT 'Tiempo real';`);
   } catch (e) {
     // Column already exists
   }
@@ -335,10 +347,12 @@ export function markMessageProcessed(id: string) {
 }
 
 export function resetDailyStats() {
-  db.prepare('DELETE FROM stats').run();
+  // We should NOT delete all stats (processedPdfs, emailsSent, errorsDetected)
+  // Those are lifetime stats. We only need to reset the daily counter in config.
   const config = getConfig();
   if (config) {
     config.emailsSentToday = 0;
+    config.lastEmailDate = new Date().toISOString().split('T')[0];
     setConfig(config);
   }
 }
@@ -378,9 +392,19 @@ export function markTextSignatureProcessed(sig: string) {
 // Audit Logs Helpers
 export function addAuditLog(log: any) {
   db.prepare(`
-    INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(log.timestamp, log.phoneNumber, log.actionType, log.nss, log.curp, log.message, log.error);
+    INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error, message_id, execution_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    log.timestamp, 
+    log.phoneNumber, 
+    log.actionType, 
+    log.nss, 
+    log.curp, 
+    log.message, 
+    log.error, 
+    log.message_id || null, 
+    log.execution_type || 'Tiempo real'
+  );
 }
 
 export function getErrorLogs(limit = 10) {

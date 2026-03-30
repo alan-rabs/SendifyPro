@@ -33,6 +33,21 @@ export function logAudit(phoneNumber: string, actionType: string, nss: string, c
 
   const timestamp = getLocalTimestamp();
   
+  const isSweep = (global as any).isValidationSweep;
+  const messageId = (global as any).sweepMessageId || '';
+  const executionType = isSweep ? 'Barrido' : 'Tiempo real';
+  
+  if (isSweep) {
+    if (!(global as any).sweepRecoveredItems) {
+      (global as any).sweepRecoveredItems = [];
+    }
+    (global as any).sweepRecoveredItems.push({
+      nss: nss !== 'NO_ENCONTRADO' ? nss : '',
+      curp: curp !== 'NO_ENCONTRADO' ? curp : '',
+      rule: actionType
+    });
+  }
+
   db.addAuditLog({
     timestamp,
     phoneNumber,
@@ -40,7 +55,9 @@ export function logAudit(phoneNumber: string, actionType: string, nss: string, c
     nss,
     curp,
     message,
-    error
+    error,
+    message_id: messageId,
+    execution_type: executionType
   });
 }
 
@@ -528,6 +545,135 @@ function replacePlaceholders(template: string, originalText: string, nss: string
 }
 
 
+export async function runValidationSweep(targetDate: string, targetContact?: string, endDate?: string) {
+  if (!client || botStatus !== 'running') {
+    log('ERROR', 'El bot debe estar en ejecución para realizar un barrido de validación.');
+    return { success: false, message: 'El bot no está en ejecución.' };
+  }
+
+  const dateMsg = endDate ? `desde ${targetDate} hasta ${endDate}` : `para la fecha: ${targetDate}`;
+  log('INFO', `Iniciando barrido de validación ${dateMsg}${targetContact ? ` en el chat: ${targetContact}` : ''}...`);
+  
+  try {
+    const chats = await client.getChats();
+    let totalMessagesChecked = 0;
+    let totalMissingFound = 0;
+    let totalFalsePositives = 0;
+    (global as any).sweepRecoveredItems = [];
+
+    const targetDateObj = new Date(targetDate);
+    // Start of the target day
+    const startOfDay = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth(), targetDateObj.getDate(), 0, 0, 0).getTime() / 1000;
+    
+    // End of the target day (or end date)
+    let endOfDay = startOfDay + 86400;
+    if (endDate) {
+      const endDateObj = new Date(endDate);
+      endOfDay = new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate(), 23, 59, 59).getTime() / 1000;
+    }
+
+    for (const chat of chats) {
+      // Filter by target contact if provided
+      if (targetContact && chat.name !== targetContact && chat.name !== targetContact.trim()) {
+        continue;
+      }
+
+      // Check if this chat is configured for processing
+      const chatConfig = config.chatConfigs?.find((c: any) => c && c.targetContact && (chat.name === c.targetContact || chat.name === c.targetContact.trim()));
+      if (!chatConfig) continue;
+
+      log('INFO', `Revisando historial del chat "${chat.name}" para validación...`);
+      
+      // Fetch a large number of messages to ensure we cover the date
+      // If endDate is provided, we might need more messages
+      const fetchLimit = endDate ? 2000 : 500;
+      const messages = await chat.fetchMessages({ limit: fetchLimit });
+      
+      for (const msg of messages) {
+        // Only process messages within the target date
+        if (msg.timestamp >= startOfDay && msg.timestamp <= endOfDay) {
+          totalMessagesChecked++;
+          
+          // Check direction rules
+          const direction = chatConfig.messageDirection || 'both';
+          if (direction === 'received' && msg.fromMe) continue;
+          if (direction === 'sent' && !msg.fromMe) continue;
+
+          const isMarkedProcessed = db.isMessageProcessed(msg.id._serialized);
+          
+          // We need to re-evaluate the message to see if it SHOULD have been processed
+          // This is a simplified check. Ideally, we'd run the full rule engine without side effects.
+          // For now, we'll check if it matches any basic criteria (has media or matches text rules)
+          let shouldBeProcessed = false;
+          let matchedRule = null;
+          
+          const rules = chatConfig.rules || [];
+          if (rules.length > 0) {
+             if (msg.hasMedia) {
+                shouldBeProcessed = true; // Simplified: assume all media in configured chats should be processed
+             } else if (msg.body) {
+                // Check text rules
+                for (const rule of rules) {
+                  if (rule.type === 'text' && rule.textMatch) {
+                    const regex = new RegExp(rule.textMatch, 'i');
+                    if (regex.test(msg.body)) {
+                      shouldBeProcessed = true;
+                      matchedRule = rule;
+                      break;
+                    }
+                  }
+                }
+             }
+          }
+
+          if (shouldBeProcessed && !isMarkedProcessed) {
+            // Found a missing message!
+            log('WARN', `Barrido: Se encontró un mensaje no procesado en ${chat.name} del ${new Date(msg.timestamp * 1000).toLocaleString()}`);
+            totalMissingFound++;
+            
+            // Process it now, marking it as a sweep execution
+            // We temporarily set a flag to indicate this is a sweep execution
+            (global as any).isValidationSweep = true;
+            (global as any).sweepMessageId = msg.id._serialized;
+            await processMessage(msg);
+            (global as any).isValidationSweep = false;
+            (global as any).sweepMessageId = null;
+            
+          } else if (!shouldBeProcessed && isMarkedProcessed) {
+            // False positive (marked as processed but shouldn't have been)
+            // This is harder to definitively prove without full context, but we log it
+            log('DEBUG', `Barrido: Posible falso positivo detectado en ${chat.name} (marcado como procesado pero no coincide con reglas actuales).`);
+            totalFalsePositives++;
+          }
+        }
+      }
+    }
+
+    const emailQueue = db.getEmailQueue();
+    const pendingEmails = emailQueue.length;
+    const recoveredItems = (global as any).sweepRecoveredItems || [];
+    (global as any).sweepRecoveredItems = null;
+
+    log('INFO', `Barrido de validación completado. Mensajes revisados: ${totalMessagesChecked}, Faltantes procesados: ${totalMissingFound}, Posibles falsos positivos: ${totalFalsePositives}, Correos en cola sin enviar: ${pendingEmails}`);
+    
+    return {
+      success: true,
+      message: `Barrido completado. Revisados: ${totalMessagesChecked}, Recuperados: ${totalMissingFound}, En cola: ${pendingEmails}`,
+      stats: {
+        checked: totalMessagesChecked,
+        recovered: totalMissingFound,
+        falsePositives: totalFalsePositives,
+        pendingEmails: pendingEmails,
+        recoveredItems: recoveredItems
+      }
+    };
+
+  } catch (err: any) {
+    log('ERROR', `Error durante el barrido de validación: ${err.message}`);
+    return { success: false, message: `Error: ${err.message}` };
+  }
+}
+
 export async function stopBot() {
   if (!client) {
     botStatus = 'stopped';
@@ -582,11 +728,6 @@ async function queueOrSendEmail(
       attachment: attachmentInfo
     });
     
-    // Increment quota reserved
-    db.incrementEmailSentToday();
-    // Update local config for immediate next checks
-    config.emailsSentToday = (config.emailsSentToday || 0) + 1;
-
     log('INFO', `Correo encolado para agrupación (Caso: ${caseType}).`);
     return true; // Assume success for queueing
   } else {
@@ -607,6 +748,8 @@ async function processEmailQueue() {
     if (!groups[key]) groups[key] = [];
     groups[key].push(item);
   }
+
+  const successfullySentKeys: string[] = [];
 
   for (const key in groups) {
     const items = groups[key];
@@ -631,6 +774,7 @@ async function processEmailQueue() {
     const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true, first.caseType);
     if (sent) {
       log('INFO', `✅ Lote de ${items.length} correos enviado a ${first.to}`);
+      successfullySentKeys.push(key);
     } else {
       log('ERROR', `❌ Error enviando lote a ${first.to}`);
       db.incrementStat('errorsDetected');
@@ -642,13 +786,16 @@ async function processEmailQueue() {
     }
   }
 
-  // Clear queue and delete temp files
+  // Clear queue and delete temp files ONLY for successfully sent items
   emailQueue.forEach(item => {
-     if (item.attachment && item.attachment.path && fs.existsSync(item.attachment.path)) {
-        try { fs.unlinkSync(item.attachment.path); } catch (e) {}
-     }
+    const key = `${item.to}_${item.cc}_${item.bcc}_${item.caseType}`;
+    if (successfullySentKeys.includes(key)) {
+      if (item.attachment && item.attachment.path && fs.existsSync(item.attachment.path)) {
+         try { fs.unlinkSync(item.attachment.path); } catch (e) {}
+      }
+      db.removeFromEmailQueue(item.id);
+    }
   });
-  db.clearEmailQueue();
 }
 
 let lastScheduleRun = '';
@@ -685,7 +832,7 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
   }
 
   // Check email limits
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' }).format(new Date());
   if (config.lastEmailDate !== today) {
     config.emailsSentToday = 0;
     config.lastEmailDate = today;
@@ -758,12 +905,10 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
     // Increment total emails sent
     db.incrementStat('emailsSent');
     
-    // Increment counter if not already incremented by queueing
-    if (!isBatch) {
-      db.incrementEmailSentToday();
-      // We also update local config to keep it in sync for immediate next checks
-      config.emailsSentToday = (config.emailsSentToday || 0) + 1;
-    }
+    // Increment daily counter for ALL emails sent (batch or individual)
+    db.incrementEmailSentToday();
+    // Re-fetch config to get the updated value
+    config = db.getConfig() || config;
     
     // Add to recent emails
     db.addRecentEmail({
@@ -844,6 +989,7 @@ function generateCustomCsvFromDb(columns: string[]): string | null {
       else if (colLower === 'curp') val = log.curp || '';
       else if (colLower === 'message') val = log.message || '';
       else if (colLower === 'error') val = log.error || '';
+      else if (colLower === 'execution_type' || colLower === 'ejecucion') val = log.execution_type || 'Tiempo real';
       
       return `"${val.replace(/"/g, '""')}"`;
     }).join(',');
@@ -864,7 +1010,7 @@ setInterval(async () => {
     (global as any).lastAuditRunGlobalEmail = `${dateStr}_${timeStr}`;
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global Email)...');
     
-    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error'];
+    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error', 'ejecucion'];
     const csvContent = generateCustomCsvFromDb(columns);
 
     if (csvContent) {
@@ -885,7 +1031,7 @@ setInterval(async () => {
     (global as any).lastAuditRunGlobalWa = `${dateStr}_${timeStr}`;
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global WhatsApp)...');
     
-    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error'];
+    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error', 'ejecucion'];
     const csvContent = generateCustomCsvFromDb(columns);
 
     if (csvContent) {
@@ -930,6 +1076,74 @@ setInterval(async () => {
         }
       }
     });
+  }
+
+  // 4. Barrido de Validación (Sweep)
+  if (config.validationSweepEnabled && config.validationSweepTime === timeStr) {
+    const sweepKey = `${dateStr}_${timeStr}_sweep`;
+    if ((global as any).lastValidationSweep !== sweepKey) {
+      // Check frequency
+      const freq = config.validationSweepFrequency || 'daily';
+      let shouldRunSweep = false;
+      const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday
+      const dayOfMonth = now.getDate();
+
+      if (freq === 'daily') {
+        shouldRunSweep = true;
+      } else if (freq === 'weekly' && dayOfWeek === 1) { // Run on Mondays
+        shouldRunSweep = true;
+      } else if (freq === 'monthly' && dayOfMonth === 1) { // Run on 1st of month
+        shouldRunSweep = true;
+      }
+
+      if (shouldRunSweep) {
+        (global as any).lastValidationSweep = sweepKey;
+        log('INFO', `Iniciando tarea programada: Barrido de Validación (${freq})...`);
+        
+        let targetDate = new Date().toISOString().split('T')[0];
+        let endDate: string | undefined = undefined;
+
+        if (freq === 'weekly') {
+          const lastWeek = new Date();
+          lastWeek.setDate(lastWeek.getDate() - 7);
+          targetDate = lastWeek.toISOString().split('T')[0];
+          endDate = new Date().toISOString().split('T')[0];
+        } else if (freq === 'monthly') {
+          const lastMonth = new Date();
+          lastMonth.setMonth(lastMonth.getMonth() - 1);
+          targetDate = lastMonth.toISOString().split('T')[0];
+          endDate = new Date().toISOString().split('T')[0];
+        }
+        
+        try {
+          const result = await runValidationSweep(targetDate, undefined, endDate);
+          
+          if (config.validationSweepEmailTargets) {
+            const subject = `Reporte de Barrido de Validación - ${dateStr}`;
+            let text = `El barrido de validación automático (${freq}) ha finalizado.\n\n`;
+            text += `Resultados:\n`;
+            text += `- Mensajes revisados: ${result.stats?.checked || 0}\n`;
+            text += `- Faltantes recuperados y procesados: ${result.stats?.recovered || 0}\n`;
+            text += `- Posibles falsos positivos: ${result.stats?.falsePositives || 0}\n`;
+            text += `- Correos en cola sin enviar: ${result.stats?.pendingEmails || 0}\n\n`;
+            
+            if (result.stats?.recoveredItems && result.stats.recoveredItems.length > 0) {
+              text += `Detalle de elementos recuperados:\n`;
+              result.stats.recoveredItems.forEach((item: any, i: number) => {
+                text += `  ${i + 1}. Regla: ${item.rule} | NSS: ${item.nss || 'N/A'} | CURP: ${item.curp || 'N/A'}\n`;
+              });
+              text += `\n`;
+            }
+
+            text += `Los elementos recuperados han sido procesados y registrados en la auditoría con el tipo de ejecución "Barrido".`;
+            
+            await sendEmail(subject, text, null, config.validationSweepEmailTargets);
+          }
+        } catch (err: any) {
+          log('ERROR', `Error en barrido de validación programado: ${err.message}`);
+        }
+      }
+    }
   }
 }, 60000); // Revisar cada minuto
 
