@@ -710,8 +710,8 @@ export default function App() {
           </div>
           <div className="flex items-center gap-4">
             <div className="flex flex-col items-end">
-              <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Correos Hoy</span>
-              <span className="text-sm font-mono font-bold text-zinc-200">{config?.emailsSentToday || 0} / {config?.emailDailyLimit || 100}</span>
+              <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">CORREOS ENVIADOS HOY</span>
+              <span className="text-sm font-mono font-bold text-zinc-200">{status?.stats.emailsSent || 0}</span>
             </div>
           </div>
         </header>
@@ -1913,18 +1913,17 @@ export default function App() {
                         <thead className="bg-zinc-900 text-zinc-500 uppercase text-[10px] font-bold tracking-widest">
                           <tr>
                             <th className="px-4 py-3">Fecha/Hora</th>
-                            <th className="px-4 py-3">Conversación</th>
-                            <th className="px-4 py-3">Regla</th>
+                            <th className="px-4 py-3">Teléfono</th>
+                            <th className="px-4 py-3">Acción</th>
                             <th className="px-4 py-3">NSS/CURP</th>
                             <th className="px-4 py-3">Ejecución</th>
-                            <th className="px-4 py-3">Status</th>
-                            <th className="px-4 py-3">Mensaje</th>
+                            <th className="px-4 py-3">Mensaje/Error</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-800">
                           {auditLogs.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="px-4 py-12 text-center text-zinc-600 italic">No se han generado registros de auditoría aún en la base de datos.</td>
+                              <td colSpan={6} className="px-4 py-12 text-center text-zinc-600 italic">No se han generado registros de auditoría aún en la base de datos.</td>
                             </tr>
                           ) : (
                             auditLogs.map((log) => (
@@ -1951,18 +1950,8 @@ export default function App() {
                                     {log.execution_type || 'Tiempo real'}
                                   </span>
                                 </td>
-                                <td className="px-4 py-3 text-zinc-300">
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    log.error === 'Email' || log.error === 'Email WA' ? 'bg-emerald-500/10 text-emerald-500' : 
-                                    log.error ? 'bg-rose-500/10 text-rose-500' : 'bg-zinc-500/10 text-zinc-500'
-                                  }`}>
-                                    {log.error === 'Email' ? 'Enviado por Email' : 
-                                     log.error === 'Email WA' ? 'Enviado por Email y WA' : 
-                                     log.error || 'N/A'}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-3 text-zinc-500 max-w-xs truncate" title={log.message}>
-                                  {log.message}
+                                <td className="px-4 py-3 text-zinc-500" title={log.message || log.error}>
+                                  {log.message || log.error}
                                 </td>
                               </tr>
                             ))
