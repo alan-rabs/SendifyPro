@@ -656,6 +656,9 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
     log('INFO', `Barrido de validación completado. Mensajes revisados: ${totalMessagesChecked}, Faltantes procesados: ${totalMissingFound}, Posibles falsos positivos: ${totalFalsePositives}, Correos en cola sin enviar: ${pendingEmails}`);
     
+    // Trigger email queue processing immediately
+    processEmailQueue();
+    
     return {
       success: true,
       message: `Barrido completado. Revisados: ${totalMessagesChecked}, Recuperados: ${totalMissingFound}, En cola: ${pendingEmails}`,
