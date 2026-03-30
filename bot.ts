@@ -981,21 +981,29 @@ function generateCustomCsvFromDb(columns: string[]): string | null {
       let val = '';
       const colLower = col.toLowerCase();
       
-      if (colLower === 'date') val = (log.timestamp || '').split(' ')[0] || '';
-      else if (colLower === 'time') val = (log.timestamp || '').split(' ')[1] || '';
-      else if (colLower === 'contact') val = log.phone_number || '';
-      else if (colLower === 'status') val = log.action_type || '';
+      const timestampParts = (log.timestamp || '').split(', ');
+      
+      if (colLower === 'date' || colLower === 'timestamp') val = timestampParts[0] || '';
+      else if (colLower === 'time' || colLower === 'hora') val = timestampParts[1] || '';
+      else if (colLower === 'contact' || colLower === 'conversacion') val = log.phone_number || '';
+      else if (colLower === 'status' && !columns.includes('Regla')) val = log.action_type || ''; // Fallback for old templates
+      else if (colLower === 'regla' || colLower === 'accion') val = log.action_type || '';
       else if (colLower === 'nss') val = log.nss || '';
       else if (colLower === 'curp') val = log.curp || '';
-      else if (colLower === 'message') val = log.message || '';
-      else if (colLower === 'error') val = log.error || '';
-      else if (colLower === 'execution_type' || colLower === 'ejecucion') val = log.execution_type || 'Tiempo real';
+      else if (colLower === 'message' || colLower === 'mensaje') val = log.message || '';
+      else if (colLower === 'error' || (colLower === 'status' && columns.includes('Regla'))) {
+        val = log.error || '';
+        if (val.toLowerCase() === 'email') {
+          val = 'enviado por Email';
+        }
+      }
+      else if (colLower === 'execution_type' || colLower === 'ejecucion' || colLower === 'ejecución') val = log.execution_type || 'Tiempo real';
       
       return `"${val.replace(/"/g, '""')}"`;
     }).join(',');
   });
 
-  return header + '\n' + rows.join('\n');
+  return '\uFEFF' + header + '\n' + rows.join('\n');
 }
 
 // Programar tareas para reportes y plantillas personalizadas
@@ -1010,7 +1018,7 @@ setInterval(async () => {
     (global as any).lastAuditRunGlobalEmail = `${dateStr}_${timeStr}`;
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global Email)...');
     
-    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error', 'ejecucion'];
+    const columns = ['Timestamp', 'Hora', 'Conversacion', 'Regla', 'NSS', 'CURP', 'Mensaje', 'Status', 'Ejecución'];
     const csvContent = generateCustomCsvFromDb(columns);
 
     if (csvContent) {
@@ -1031,7 +1039,7 @@ setInterval(async () => {
     (global as any).lastAuditRunGlobalWa = `${dateStr}_${timeStr}`;
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global WhatsApp)...');
     
-    const columns = ['date', 'time', 'contact', 'status', 'nss', 'curp', 'message', 'error', 'ejecucion'];
+    const columns = ['Timestamp', 'Hora', 'Conversacion', 'Regla', 'NSS', 'CURP', 'Mensaje', 'Status', 'Ejecución'];
     const csvContent = generateCustomCsvFromDb(columns);
 
     if (csvContent) {

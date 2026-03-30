@@ -146,24 +146,35 @@ async function startServer() {
   app.get("/api/audit/export", (req, res) => {
     try {
       const logs = db.getAuditLogs(5000);
-      let csv = "ID,Timestamp,Teléfono,Acción,NSS,CURP,Mensaje,Error,Ejecución\n";
+      // Add UTF-8 BOM to fix encoding issues in Excel
+      let csv = "\uFEFFID,Timestamp,Hora,Conversacion,Regla,NSS,CURP,Mensaje,Status,Ejecución\n";
       
       logs.forEach((log: any) => {
+        const timestampParts = (log.timestamp || '').split(', ');
+        const datePart = timestampParts[0] || '';
+        const timePart = timestampParts[1] || '';
+        
+        let status = log.error || '';
+        if (status.toLowerCase() === 'email') {
+          status = 'enviado por Email';
+        }
+
         const row = [
           log.id,
-          log.timestamp,
-          log.phone_number,
-          log.action_type,
-          log.nss,
-          log.curp,
+          `"${datePart}"`,
+          `"${timePart}"`,
+          `"${(log.phone_number || '').replace(/"/g, '""')}"`,
+          `"${(log.action_type || '').replace(/"/g, '""')}"`,
+          `"${(log.nss || '').replace(/"/g, '""')}"`,
+          `"${(log.curp || '').replace(/"/g, '""')}"`,
           `"${(log.message || '').replace(/"/g, '""')}"`,
-          `"${(log.error || '').replace(/"/g, '""')}"`,
+          `"${status.replace(/"/g, '""')}"`,
           `"${(log.execution_type || 'Tiempo real').replace(/"/g, '""')}"`
         ].join(',');
         csv += row + "\n";
       });
 
-      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename=audit_export.csv');
       res.send(csv);
     } catch (e) {
