@@ -32,7 +32,8 @@ import {
   HelpCircle,
   BookOpen,
   ShieldCheck,
-  Zap
+  Zap,
+  Layers
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
