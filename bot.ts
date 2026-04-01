@@ -169,7 +169,7 @@ export async function startBot() {
     puppeteer: {
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
       timeout: 60000,
-      protocolTimeout: 1200000 // 20 minutos para evitar timeouts en barridos largos
+      protocolTimeout: 7200000 // 2 horas para evitar timeouts en barridos largos
     }
   });
 
@@ -196,6 +196,10 @@ export async function startBot() {
 
       for (const chatConf of (config.chatConfigs || [])) {
         if (!chatConf || !chatConf.targetContact) continue;
+        if (chatConf.enabled === false) {
+          log('INFO', `Saltando chat "${chatConf.targetContact}" porque está desactivado.`);
+          continue;
+        }
         
         const targetChat = chats.find((c: any) => c.name === chatConf.targetContact || c.name === chatConf.targetContact.trim());
 
@@ -209,7 +213,7 @@ export async function startBot() {
             log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
             
             // Fetch a larger batch to find messages from that date
-            const batch = await targetChat.fetchMessages({ limit: 500 });
+            const batch = await targetChat.fetchMessages({ limit: 5000 });
             messages = batch.filter((m: any) => m.timestamp >= targetTimestamp);
             log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
           } else {
@@ -219,9 +223,14 @@ export async function startBot() {
           }
           
           let processedCount = 0;
-          for (const msg of messages) {
+          for (let i = 0; i < messages.length; i++) {
+            const msg = messages[i];
             const processed = await processMessage(msg);
             if (processed) processedCount++;
+            
+            if (i > 0 && i % 500 === 0) {
+              log('INFO', `Progreso de recuperación en "${chatConf.targetContact}": ${i}/${messages.length} mensajes revisados...`);
+            }
           }
           
           if (processedCount > 0) {
@@ -283,6 +292,7 @@ async function processMessage(msg: any): Promise<boolean> {
     const chatConfig = config.chatConfigs?.find((c: any) => c && c.targetContact && (chat.name === c.targetContact || chat.name === c.targetContact.trim()));
     
     if (!chatConfig) return false;
+    if (chatConfig.enabled === false) return false;
 
     const direction = chatConfig.messageDirection || 'both';
     if (direction === 'received' && msg.fromMe) return false;
@@ -635,15 +645,25 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
       // Check if this chat is configured for processing
       const chatConfig = config.chatConfigs?.find((c: any) => c && c.targetContact && (chat.name === c.targetContact || chat.name === c.targetContact.trim()));
       if (!chatConfig) continue;
+      if (chatConfig.enabled === false) {
+        log('INFO', `Saltando chat "${chat.name}" en el barrido porque está desactivado.`);
+        continue;
+      }
 
       log('INFO', `Revisando historial del chat "${chat.name}" para validación...`);
       
       // Fetch a large number of messages to ensure we cover the date
       // If endDate is provided, we might need more messages
-      const fetchLimit = endDate ? 3000 : 1000;
+      const fetchLimit = endDate ? 5000 : 3000;
       const messages = await chat.fetchMessages({ limit: fetchLimit });
       
-      for (const msg of messages) {
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        
+        if (i > 0 && i % 500 === 0) {
+          log('INFO', `Barrido en "${chat.name}": Analizados ${i}/${messages.length} mensajes...`);
+        }
+        
         // Only process messages within the target date
         if (msg.timestamp >= startOfDay && msg.timestamp <= endOfDay) {
           totalMessagesChecked++;

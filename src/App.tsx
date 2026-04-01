@@ -100,6 +100,7 @@ interface ChatConfig {
   rules: AutomationRule[];
   emailBcc?: string;
   emailCc?: string;
+  enabled?: boolean;
 }
 
 interface AuditTemplate {
@@ -474,7 +475,8 @@ export default function App() {
       processingMode: 'simple',
       rules: [],
       emailCc: '',
-      emailBcc: ''
+      emailBcc: '',
+      enabled: true
     };
     setConfig({ ...config, chatConfigs: [...config.chatConfigs, newChat] });
     setExpandedChat(newChat.id);
@@ -1435,6 +1437,16 @@ export default function App() {
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateChatConfig(chat.id, 'enabled', chat.enabled === false ? true : false);
+                              }}
+                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${chat.enabled !== false ? 'bg-emerald-500' : 'bg-zinc-700'}`}
+                              title={chat.enabled !== false ? "Chat activado" : "Chat desactivado"}
+                            >
+                              <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${chat.enabled !== false ? 'translate-x-5' : 'translate-x-1'}`} />
+                            </button>
                             <button 
                               onClick={(e) => { e.stopPropagation(); removeChatConfig(chat.id); }}
                               className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"
