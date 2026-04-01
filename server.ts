@@ -169,7 +169,7 @@ async function startServer() {
     try {
       const logs = db.getAuditLogs(5000);
       // Add UTF-8 BOM to fix encoding issues in Excel
-      let csv = "\uFEFFID,Timestamp,Hora,Conversacion,Regla,NSS,CURP,Mensaje,Status,Ejecución\n";
+      let csv = "\uFEFFID,Timestamp,Hora,Conversacion,Regla,NSS,CURP,Mensaje,Status,Ejecución,Fecha/Hora Procesamiento\n";
       
       logs.forEach((log: any) => {
         const timestampParts = (log.timestamp || '').split(', ');
@@ -191,7 +191,8 @@ async function startServer() {
           `"${(log.curp || '').replace(/"/g, '""')}"`,
           `"${(log.message || '').replace(/"/g, '""')}"`,
           `"${status.replace(/"/g, '""')}"`,
-          `"${(log.execution_type || 'Tiempo real').replace(/"/g, '""')}"`
+          `"${(log.execution_type || 'Tiempo real').replace(/"/g, '""')}"`,
+          `"${(log.processing_timestamp || log.timestamp || '').replace(/"/g, '""')}"`
         ].join(',');
         csv += row + "\n";
       });
