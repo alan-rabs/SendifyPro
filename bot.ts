@@ -169,7 +169,7 @@ export async function startBot() {
     puppeteer: {
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
       timeout: 60000,
-      protocolTimeout: 300000
+      protocolTimeout: 1200000 // 20 minutos para evitar timeouts en barridos largos
     }
   });
 
@@ -190,7 +190,7 @@ export async function startBot() {
     log('INFO', `Escuchando mensajes de ${config.chatConfigs?.length || 0} chats configurados.`);
 
     try {
-      log('INFO', `Buscando chats para recuperar mensajes pendientes...`);
+      log('INFO', `Obteniendo lista de chats para recuperar mensajes pendientes (esto puede demorar)...`);
       const chats = await client.getChats();
       let totalProcessed = 0;
 
@@ -608,6 +608,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
   log('INFO', `Iniciando barrido de validación ${dateMsg}${targetContact ? ` en el chat: ${targetContact}` : ''}...`);
   
   try {
+    log('INFO', 'Obteniendo lista de chats (esto puede demorar unos minutos si hay muchos chats)...');
     const chats = await client.getChats();
     let totalMessagesChecked = 0;
     let totalMissingFound = 0;
