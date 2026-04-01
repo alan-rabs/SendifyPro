@@ -28,10 +28,11 @@ function getLocalTimestamp() {
   return new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
 }
 
-export function logAudit(phoneNumber: string, actionType: string, nss: string, curp: string, message: string = '', error: string = '') {
+export function logAudit(phoneNumber: string, actionType: string, nss: string, curp: string, message: string = '', error: string = '', originalTimestamp?: number) {
   if (actionType === 'SUCCESS_TEXT') return; // Ignorar SUCCESS_TEXT en el CSV
 
-  const timestamp = getLocalTimestamp();
+  const processingTimestamp = getLocalTimestamp();
+  const timestamp = originalTimestamp ? new Date(originalTimestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }) : processingTimestamp;
   
   const isSweep = (global as any).isValidationSweep;
   const messageId = (global as any).sweepMessageId || '';
@@ -57,7 +58,8 @@ export function logAudit(phoneNumber: string, actionType: string, nss: string, c
     message,
     error,
     message_id: messageId,
-    execution_type: executionType
+    execution_type: executionType,
+    processing_timestamp: processingTimestamp
   });
 }
 
@@ -564,7 +566,7 @@ async function processMessage(msg: any): Promise<boolean> {
           didProcessSomething = true;
           // Registrar en auditoría (usando el primer match como representativo)
           const firstMatch = matchesToProcess[0];
-          logAudit(chat.name, rule.name, firstMatch.nss, firstMatch.curp, firstMatch.text.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
+          logAudit(chat.name, rule.name, firstMatch.nss, firstMatch.curp, firstMatch.text.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''), msg.timestamp);
         }
 
         if (processingError) {

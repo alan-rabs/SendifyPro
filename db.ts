@@ -97,6 +97,11 @@ try {
   } catch (e) {
     // Column already exists
   }
+  try {
+    db.exec(`ALTER TABLE audit_logs ADD COLUMN processing_timestamp TEXT;`);
+  } catch (e) {
+    // Column already exists
+  }
 } catch (e) {
   console.error("Error initializing tables:", e);
 }
@@ -392,8 +397,8 @@ export function markTextSignatureProcessed(sig: string) {
 // Audit Logs Helpers
 export function addAuditLog(log: any) {
   db.prepare(`
-    INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error, message_id, execution_type)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error, message_id, execution_type, processing_timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     log.timestamp, 
     log.phoneNumber, 
@@ -403,7 +408,8 @@ export function addAuditLog(log: any) {
     log.message, 
     log.error, 
     log.message_id || null, 
-    log.execution_type || 'Tiempo real'
+    log.execution_type || 'Tiempo real',
+    log.processing_timestamp || null
   );
 }
 

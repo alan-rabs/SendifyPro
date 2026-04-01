@@ -2012,7 +2012,8 @@ export default function App() {
                       <table className="w-full text-left text-xs">
                         <thead className="bg-zinc-900 text-zinc-500 uppercase text-[10px] font-bold tracking-widest">
                           <tr>
-                            <th className="px-4 py-3">Fecha/Hora</th>
+                            <th className="px-4 py-3">Fecha/Hora Original</th>
+                            <th className="px-4 py-3">Fecha/Hora Procesamiento</th>
                             <th className="px-4 py-3">Teléfono</th>
                             <th className="px-4 py-3">Acción</th>
                             <th className="px-4 py-3">NSS/CURP</th>
@@ -2023,12 +2024,13 @@ export default function App() {
                         <tbody className="divide-y divide-zinc-800">
                           {auditLogs.length === 0 ? (
                             <tr>
-                              <td colSpan={6} className="px-4 py-12 text-center text-zinc-600 italic">No se han generado registros de auditoría aún en la base de datos.</td>
+                              <td colSpan={7} className="px-4 py-12 text-center text-zinc-600 italic">No se han generado registros de auditoría aún en la base de datos.</td>
                             </tr>
                           ) : (
                             auditLogs.map((log) => (
                               <tr key={log.id} className="hover:bg-zinc-900/50 transition-colors">
                                 <td className="px-4 py-3 font-mono text-zinc-400 whitespace-nowrap">{log.timestamp}</td>
+                                <td className="px-4 py-3 font-mono text-zinc-500 whitespace-nowrap">{log.processing_timestamp || log.timestamp}</td>
                                 <td className="px-4 py-3 text-zinc-300">{log.phone_number}</td>
                                 <td className="px-4 py-3">
                                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
