@@ -221,6 +221,10 @@ export default function App() {
   const [statsStartDate, setStatsStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [statsEndDate, setStatsEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [auditStats, setAuditStats] = useState<{total: number, email: number, whatsapp: number} | null>(null);
+  const [showClearAuditModal, setShowClearAuditModal] = useState(false);
+  const [isClearingAudit, setIsClearingAudit] = useState(false);
+  const [showResetMetricsModal, setShowResetMetricsModal] = useState(false);
+  const [isResettingMetrics, setIsResettingMetrics] = useState(false);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -334,6 +338,47 @@ export default function App() {
       setAuditLogs([]);
     }
   }, []);
+
+  const handleClearAudit = async () => {
+    setIsClearingAudit(true);
+    try {
+      const res = await fetch('/api/audit/clear', { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message || "Historial de auditoría limpiado");
+        setShowClearAuditModal(false);
+        fetchAuditLogs();
+        fetchStats();
+      } else {
+        toast.error(data.error || "Error al limpiar el historial");
+      }
+    } catch (e) {
+      console.error("Error clearing audit logs", e);
+      toast.error("Error al limpiar el historial de auditoría");
+    } finally {
+      setIsClearingAudit(false);
+    }
+  };
+
+  const handleResetMetrics = async () => {
+    setIsResettingMetrics(true);
+    try {
+      const res = await fetch('/api/stats/reset', { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(data.message || "Métricas reiniciadas");
+        setShowResetMetricsModal(false);
+        fetchStatus();
+      } else {
+        toast.error(data.error || "Error al reiniciar métricas");
+      }
+    } catch (e) {
+      console.error("Error resetting metrics", e);
+      toast.error("Error al reiniciar métricas");
+    } finally {
+      setIsResettingMetrics(false);
+    }
+  };
 
   const checkUpdates = async () => {
     try {
@@ -787,7 +832,14 @@ export default function App() {
               >
                 {/* Stats Grid */}
                 <div className="space-y-4">
-                  <div className="flex justify-end">
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setShowResetMetricsModal(true)}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-red-400 hover:text-red-300 bg-red-900/20 border border-red-900/30 rounded-lg transition-colors"
+                    >
+                      <RefreshCw size={14} />
+                      Reiniciar Métricas y Vaciar Cola
+                    </button>
                     <button
                       onClick={() => setAreStatCardsExpanded(!areStatCardsExpanded)}
                       className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 bg-zinc-900 border border-zinc-800 rounded-lg transition-colors"
@@ -1998,7 +2050,13 @@ export default function App() {
                 </Card>
 
                 <Card title="Registros de Auditoría (Recientes)" icon={FileText}>
-                  <div className="flex justify-end mb-4">
+                  <div className="flex justify-end mb-4 gap-2">
+                    <button
+                      onClick={() => setShowClearAuditModal(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-red-900/30 text-red-400 border border-red-900/50 rounded-lg font-bold text-xs hover:bg-red-900/50 transition-all"
+                    >
+                      <Trash2 size={14} /> Limpiar Historial
+                    </button>
                     <a 
                       href="/api/audit/export" 
                       className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg font-bold text-xs hover:bg-blue-500 transition-all shadow-lg shadow-blue-600/20"
@@ -2469,6 +2527,113 @@ export default function App() {
           background: #3f3f46;
         }
       `}</style>
+
+      {/* Clear Audit Modal */}
+      <AnimatePresence>
+        {showClearAuditModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex items-center gap-3 text-red-500 mb-4">
+                <div className="p-3 bg-red-500/10 rounded-full">
+                  <AlertTriangle size={24} />
+                </div>
+                <h3 className="text-lg font-bold text-white">¿Limpiar Historial de Auditoría?</h3>
+              </div>
+              <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
+                Esta acción eliminará <strong>todos los registros</strong> de la tabla de auditoría. 
+                El caché de los chats no se verá afectado, por lo que el bot no volverá a procesar mensajes antiguos.
+                <br /><br />
+                <span className="text-red-400 font-medium">Esta acción no se puede deshacer.</span> ¿Estás seguro?
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setShowClearAuditModal(false)}
+                  disabled={isClearingAudit}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleClearAudit}
+                  disabled={isClearingAudit}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-600/20 disabled:opacity-50"
+                >
+                  {isClearingAudit ? (
+                    <><RefreshCw size={16} className="animate-spin" /> Limpiando...</>
+                  ) : (
+                    <><Trash2 size={16} /> Sí, limpiar historial</>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {/* Reset Metrics Modal */}
+      <AnimatePresence>
+        {showResetMetricsModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl"
+            >
+              <div className="flex items-center gap-3 text-red-500 mb-4">
+                <div className="p-3 bg-red-500/10 rounded-full">
+                  <AlertTriangle size={24} />
+                </div>
+                <h3 className="text-lg font-bold text-white">¿Reiniciar Métricas y Vaciar Cola?</h3>
+              </div>
+              <p className="text-sm text-zinc-400 mb-6 leading-relaxed">
+                Esta acción realizará lo siguiente:
+                <ul className="list-disc pl-5 mt-2 space-y-1 text-zinc-300">
+                  <li>Pondrá a <strong>0</strong> las tarjetas de Archivos Procesados, Correos Enviados y Errores Detectados.</li>
+                  <li>Vaciará la <strong>cola de correos pendientes</strong> (no se enviarán los correos que dejó el barrido).</li>
+                  <li>Limpiará el historial de errores recientes del panel.</li>
+                </ul>
+                <br />
+                <span className="text-emerald-400 font-medium">No te preocupes:</span> El caché de WhatsApp y tu historial de Auditoría (CSV) <strong>NO</strong> se borrarán.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setShowResetMetricsModal(false)}
+                  disabled={isResettingMetrics}
+                  className="px-4 py-2 rounded-lg text-sm font-bold text-zinc-300 hover:bg-zinc-800 transition-colors disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleResetMetrics}
+                  disabled={isResettingMetrics}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-bold transition-colors shadow-lg shadow-red-600/20 disabled:opacity-50"
+                >
+                  {isResettingMetrics ? (
+                    <><RefreshCw size={16} className="animate-spin" /> Reiniciando...</>
+                  ) : (
+                    <><RefreshCw size={16} /> Sí, reiniciar y vaciar</>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -143,6 +143,24 @@ async function startServer() {
     }
   });
 
+  app.delete("/api/audit/clear", (req, res) => {
+    try {
+      db.clearAuditLogs();
+      res.json({ success: true, message: "Historial de auditoría limpiado correctamente" });
+    } catch (e) {
+      res.status(500).json({ error: "Error al limpiar el historial de auditoría" });
+    }
+  });
+
+  app.delete("/api/stats/reset", (req, res) => {
+    try {
+      db.resetAllMetrics();
+      res.json({ success: true, message: "Métricas reiniciadas y cola vaciada correctamente" });
+    } catch (e) {
+      res.status(500).json({ error: "Error al reiniciar las métricas" });
+    }
+  });
+
   app.get("/api/audit/stats", (req, res) => {
     try {
       const { startDate, endDate } = req.query;

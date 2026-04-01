@@ -362,6 +362,22 @@ export function resetDailyStats() {
   }
 }
 
+export function resetAllMetrics() {
+  try {
+    // Reset stats to 0
+    db.prepare("UPDATE stats SET value = 0 WHERE key IN ('processedPdfs', 'emailsSent', 'errorsDetected')").run();
+    // Clear recent errors
+    db.prepare("DELETE FROM recent_errors").run();
+    // Clear email queue
+    db.prepare("DELETE FROM email_queue").run();
+    // Clear last processed file metadata
+    db.prepare("DELETE FROM metadata WHERE key = 'last_processed_file'").run();
+  } catch (e) {
+    console.error("Error in resetAllMetrics:", e);
+    throw e;
+  }
+}
+
 export function clearProcessedMessagesCache() {
   db.prepare('DELETE FROM processed_messages').run();
   db.prepare('DELETE FROM processed_pdfs').run();
@@ -428,6 +444,15 @@ export function getAuditLogs(limit = 1000) {
   } catch (e) {
     console.error("Error in getAuditLogs:", e);
     return [];
+  }
+}
+
+export function clearAuditLogs() {
+  try {
+    db.prepare('DELETE FROM audit_logs').run();
+  } catch (e) {
+    console.error("Error in clearAuditLogs:", e);
+    throw e;
   }
 }
 
