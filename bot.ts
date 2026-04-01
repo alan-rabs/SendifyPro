@@ -340,58 +340,59 @@ async function processMessage(msg: any): Promise<boolean> {
 
       if (rule.type === 'text') {
         const trigger = (rule.triggerValue || '').trim();
+        const fullText = textContent.trim();
         
-        for (const line of lines) {
-          const text = line.trim();
-          let isLineMatch = false;
+        // 1. Intentar coincidencia GLOBAL primero (mensaje completo)
+        let isGlobalMatch = false;
+        if (rule.subtype === 'exact') {
+          isGlobalMatch = fullText.toLowerCase() === trigger.toLowerCase();
+        } else if (rule.subtype === 'contains') {
+          isGlobalMatch = fullText.toLowerCase().includes(trigger.toLowerCase());
+        } else if (rule.subtype === 'regex') {
+          try {
+            const re = new RegExp(trigger, 'i');
+            isGlobalMatch = re.test(fullText);
+          } catch (e) {
+            log('ERROR', `Regex inválido en regla "${rule.name}": ${trigger}`);
+          }
+        }
 
-          if (rule.subtype === 'exact') {
-            isLineMatch = text.toLowerCase() === trigger.toLowerCase();
-          } else if (rule.subtype === 'contains') {
-            isLineMatch = text.toLowerCase().includes(trigger.toLowerCase());
-          } else if (rule.subtype === 'regex') {
-            try {
-              const re = new RegExp(trigger, 'i');
-              isLineMatch = re.test(text);
-            } catch (e) {
-              // Only log once per rule to avoid spam
+        if (isGlobalMatch) {
+          log('DEBUG', `✅ Regla de texto "${rule.name}" coincide globalmente.`);
+          matchesToProcess.push({ text: textContent, nss: globalNss, curp: globalCurp });
+        } else {
+          // 2. Si no coincide globalmente, intentar POR LÍNEA
+          for (const line of lines) {
+            const text = line.trim();
+            let isLineMatch = false;
+
+            if (rule.subtype === 'exact') {
+              isLineMatch = text.toLowerCase() === trigger.toLowerCase();
+            } else if (rule.subtype === 'contains') {
+              isLineMatch = text.toLowerCase().includes(trigger.toLowerCase());
+            } else if (rule.subtype === 'regex') {
+              try {
+                const re = new RegExp(trigger, 'i');
+                isLineMatch = re.test(text);
+              } catch (e) {
+                // Ya logueado arriba
+              }
+            }
+
+            if (isLineMatch) {
+              const lineNssMatch = text.match(/\b\d{11}\b/);
+              const lineCurpMatch = text.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/i);
+              matchesToProcess.push({
+                text: text,
+                nss: lineNssMatch ? lineNssMatch[0] : globalNss,
+                curp: lineCurpMatch ? lineCurpMatch[0].toUpperCase() : globalCurp
+              });
             }
           }
-
-          if (isLineMatch) {
-            const lineNssMatch = text.match(/\b\d{11}\b/);
-            const lineCurpMatch = text.match(/[A-Z][AEIOUX][A-Z]{2}\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])[HM](?:AS|B[CS]|C[CLMSH]|D[FG]|G[TR]|HG|JC|M[CNS]|N[ETL]|OC|PL|Q[TR]|S[PLR]|T[CSL]|VZ|YN|ZS)[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d/i);
-            matchesToProcess.push({
-              text: text,
-              nss: lineNssMatch ? lineNssMatch[0] : globalNss,
-              curp: lineCurpMatch ? lineCurpMatch[0].toUpperCase() : globalCurp
-            });
+          
+          if (matchesToProcess.length > 0) {
+            log('DEBUG', `✅ Regla de texto "${rule.name}" coincide en ${matchesToProcess.length} líneas.`);
           }
-        }
-        
-        // If no line matched, check the whole text just in case the trigger spans multiple lines
-        if (matchesToProcess.length === 0) {
-           let isGlobalMatch = false;
-           const text = textContent.trim();
-           if (rule.subtype === 'exact') {
-             isGlobalMatch = text.toLowerCase() === trigger.toLowerCase();
-           } else if (rule.subtype === 'contains') {
-             isGlobalMatch = text.toLowerCase().includes(trigger.toLowerCase());
-           } else if (rule.subtype === 'regex') {
-             try {
-               const re = new RegExp(trigger, 'i');
-               isGlobalMatch = re.test(text);
-             } catch (e) {
-               log('ERROR', `Regex inválido en regla "${rule.name}": ${trigger}`);
-             }
-           }
-           if (isGlobalMatch) {
-             matchesToProcess.push({ text: textContent, nss: globalNss, curp: globalCurp });
-           }
-        }
-
-        if (matchesToProcess.length > 0) {
-           log('DEBUG', `✅ Regla de texto "${rule.name}" coincide (${matchesToProcess.length} veces).`);
         }
 
       } else if (rule.type === 'file') {
@@ -439,78 +440,97 @@ async function processMessage(msg: any): Promise<boolean> {
       if (matchesToProcess.length > 0) {
         log('INFO', `🎯 Regla disparada: "${rule.name}" en chat "${chat.name}" (${matchesToProcess.length} coincidencias)`);
         
+        let emailSent = false;
+        let waSent = false;
+        let processingError = false;
+
+        const uniqueEmailBodies = new Set<string>();
+        const uniqueWaBodies = new Set<string>();
+        let emailSubject = '';
+
+        // Recopilar todos los cuerpos de mensaje únicos para esta regla
         for (const match of matchesToProcess) {
-          let emailSent = false;
-          let waSent = false;
-          let processingError = false;
-
-          // Process Email Action
           if (rule.emailEnabled) {
-            const subject = replacePlaceholders(rule.emailSubject || 'Alerta de Regla: {rule_name}', match.text, match.nss, match.curp, rule.name);
+            emailSubject = replacePlaceholders(rule.emailSubject || 'Alerta de Regla: {rule_name}', match.text, match.nss, match.curp, rule.name);
             const body = replacePlaceholders(rule.emailBody || 'Se ha detectado una coincidencia con la regla {rule_name}.', match.text, match.nss, match.curp, rule.name);
-            
-            let attachment = null;
-            if (msg.hasMedia && media) {
-              let filename = media.filename || `archivo_${Date.now()}.${media.mimetype.split('/')[1] || 'bin'}`;
-              if (rule.emailAttachmentName) {
-                const customName = replacePlaceholders(rule.emailAttachmentName, match.text, match.nss, match.curp, rule.name);
-                const ext = filename.split('.').pop() || 'bin';
-                filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
-              }
-              attachment = {
-                filename,
-                content: Buffer.from(media.data, 'base64')
-              };
-            }
-
-            const targets = rule.emailTargets || config.emailDestino;
-            const sent = await queueOrSendEmail(subject, body, attachment, rule.emailTargets, chatConfig.emailBcc, chatConfig.emailCc, rule.name);
-            if (sent) {
-              emailSent = true;
-              log('INFO', `📧 Acción de correo ejecutada para regla "${rule.name}". Destinatario(s): ${targets}`);
-            } else {
-              processingError = true;
-              log('ERROR', `❌ Falló la acción de correo para regla "${rule.name}".`);
-            }
+            uniqueEmailBodies.add(body.trim());
           }
-
-          // Process WhatsApp Action
           if (rule.waEnabled) {
             const waMsg = replacePlaceholders(rule.waMessage || 'Regla disparada: {rule_name}', match.text, match.nss, match.curp, rule.name);
-            
-            let waMedia = null;
-            if (msg.hasMedia && media) {
-              waMedia = { ...media };
-              if (rule.waAttachmentName) {
-                const customName = replacePlaceholders(rule.waAttachmentName, match.text, match.nss, match.curp, rule.name);
-                const ext = (media.filename || '').split('.').pop() || 'bin';
-                waMedia.filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
-              }
+            uniqueWaBodies.add(waMsg.trim());
+          }
+        }
+
+        // Process Email Action (Una sola vez por regla)
+        if (rule.emailEnabled && uniqueEmailBodies.size > 0) {
+          const combinedBody = Array.from(uniqueEmailBodies).join('\n\n');
+          
+          let attachment = null;
+          if (msg.hasMedia && media) {
+            // Usamos el primer match para el nombre del archivo si tiene placeholders
+            const firstMatch = matchesToProcess[0];
+            let filename = media.filename || `archivo_${Date.now()}.${media.mimetype.split('/')[1] || 'bin'}`;
+            if (rule.emailAttachmentName) {
+              const customName = replacePlaceholders(rule.emailAttachmentName, firstMatch.text, firstMatch.nss, firstMatch.curp, rule.name);
+              const ext = filename.split('.').pop() || 'bin';
+              filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
             }
+            attachment = {
+              filename,
+              content: Buffer.from(media.data, 'base64')
+            };
+          }
 
-            const sent = await sendToWhatsAppChats(rule.waTargets, waMsg, waMedia);
-            if (sent) {
-              waSent = true;
-              log('INFO', `📱 Mensaje de WhatsApp enviado para regla "${rule.name}" a: ${rule.waTargets}`);
-            } else {
-              processingError = true;
-              log('ERROR', `❌ Falló el envío de WhatsApp para regla "${rule.name}".`);
+          const targets = rule.emailTargets || config.emailDestino;
+          const sent = await queueOrSendEmail(emailSubject, combinedBody, attachment, rule.emailTargets, chatConfig.emailBcc, chatConfig.emailCc, rule.name);
+          if (sent) {
+            emailSent = true;
+            log('INFO', `📧 Acción de correo ejecutada para regla "${rule.name}". Destinatario(s): ${targets}`);
+          } else {
+            processingError = true;
+            log('ERROR', `❌ Falló la acción de correo para regla "${rule.name}".`);
+          }
+        }
+
+        // Process WhatsApp Action (Una sola vez por regla)
+        if (rule.waEnabled && uniqueWaBodies.size > 0) {
+          const combinedWaMsg = Array.from(uniqueWaBodies).join('\n\n');
+          
+          let waMedia = null;
+          if (msg.hasMedia && media) {
+            waMedia = { ...media };
+            const firstMatch = matchesToProcess[0];
+            if (rule.waAttachmentName) {
+              const customName = replacePlaceholders(rule.waAttachmentName, firstMatch.text, firstMatch.nss, firstMatch.curp, rule.name);
+              const ext = (media.filename || '').split('.').pop() || 'bin';
+              waMedia.filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
             }
           }
 
-          if (emailSent || waSent) {
-            didProcessSomething = true;
-            logAudit(chat.name, rule.name, match.nss, match.curp, match.text.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
+          const sent = await sendToWhatsAppChats(rule.waTargets, combinedWaMsg, waMedia);
+          if (sent) {
+            waSent = true;
+            log('INFO', `📱 Mensaje de WhatsApp enviado para regla "${rule.name}" a: ${rule.waTargets}`);
+          } else {
+            processingError = true;
+            log('ERROR', `❌ Falló el envío de WhatsApp para regla "${rule.name}".`);
           }
+        }
 
-          if (processingError) {
-            db.incrementStat('errorsDetected');
-            db.addRecentError({
-              timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
-              action_type: rule.name,
-              error: `Fallo en acción de regla: ${rule.name}`
-            });
-          }
+        if (emailSent || waSent) {
+          didProcessSomething = true;
+          // Registrar en auditoría (usando el primer match como representativo)
+          const firstMatch = matchesToProcess[0];
+          logAudit(chat.name, rule.name, firstMatch.nss, firstMatch.curp, firstMatch.text.substring(0, 200), (emailSent ? 'Email' : '') + (waSent ? ' WA' : ''));
+        }
+
+        if (processingError) {
+          db.incrementStat('errorsDetected');
+          db.addRecentError({
+            timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+            action_type: rule.name,
+            error: `Fallo en acción de regla: ${rule.name}`
+          });
         }
 
         if (chatConfig.processingMode === 'simple') {
@@ -759,20 +779,28 @@ async function processEmailQueue() {
     const first = items[0];
     
     const subject = `[Sendify PRO Lote] ${items.length} reportes de ${first.caseType}`;
-    let combinedBody = `Se han procesado ${items.length} elementos en este lote:\n\n`;
+    
+    const uniqueBodies = new Set<string>();
     const attachments: { filename: string, content: Buffer }[] = [];
+    const addedAttachmentPaths = new Set<string>();
 
-    items.forEach((item, index) => {
-       combinedBody += `--- Elemento ${index + 1} ---\n`;
-       combinedBody += `Asunto original: ${item.subject}\n`;
-       combinedBody += `${item.body}\n\n`;
+    items.forEach((item) => {
+       if (item.body) {
+         uniqueBodies.add(item.body.trim());
+       }
+       
        if (item.attachment && fs.existsSync(item.attachment.path)) {
-         attachments.push({
-           filename: item.attachment.filename,
-           content: fs.readFileSync(item.attachment.path)
-         });
+         if (!addedAttachmentPaths.has(item.attachment.path)) {
+           attachments.push({
+             filename: item.attachment.filename,
+             content: fs.readFileSync(item.attachment.path)
+           });
+           addedAttachmentPaths.add(item.attachment.path);
+         }
        }
     });
+
+    const combinedBody = Array.from(uniqueBodies).join('\n\n');
 
     const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true, first.caseType);
     if (sent) {
