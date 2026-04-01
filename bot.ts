@@ -121,11 +121,44 @@ let client: any = null;
 export let botStatus = 'stopped'; // 'stopped', 'starting', 'awaiting_qr', 'running', 'error'
 export let currentQrCode: string | null = null;
 
+function cleanupOrphanedTempFiles() {
+  try {
+    const tempDir = path.join(process.cwd(), 'bot_data', 'temp_attachments');
+    if (!fs.existsSync(tempDir)) return;
+
+    const files = fs.readdirSync(tempDir);
+    if (files.length === 0) return;
+
+    const emailQueue = db.getEmailQueue();
+    const activePaths = new Set(emailQueue.map(item => item.attachment?.path).filter(Boolean));
+
+    let deletedCount = 0;
+    for (const file of files) {
+      const filePath = path.join(tempDir, file);
+      if (!activePaths.has(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+        } catch (e) {}
+      }
+    }
+    
+    if (deletedCount > 0) {
+      log('INFO', `🧹 Limpieza: Se eliminaron ${deletedCount} archivos temporales huérfanos para liberar espacio.`);
+    }
+  } catch (err) {
+    log('ERROR', `Error durante la limpieza de archivos temporales: ${err}`);
+  }
+}
+
 export async function startBot() {
   if (client) {
     log('WARN', 'El bot ya está en ejecución o iniciando.');
     return;
   }
+
+  // Limpiar archivos temporales que no estén en la cola antes de iniciar
+  cleanupOrphanedTempFiles();
 
   log('INFO', 'Iniciando motor de WhatsApp Web (Modo Invisible)...');
   botStatus = 'starting';
@@ -791,7 +824,22 @@ async function processEmailQueue() {
     const items = groups[key];
     const first = items[0];
     
-    const subject = `[Sendify PRO Lote] ${items.length} reportes de ${first.caseType}`;
+    // Buscar la configuración de la regla
+    let ruleConfig: any = null;
+    for (const chat of config.chatConfigs || []) {
+      const rule = chat.rules?.find((r: any) => r.name === first.caseType);
+      if (rule) {
+        ruleConfig = rule;
+        break;
+      }
+    }
+
+    let subjectTemplate = ruleConfig?.emailSubjectGrouped || '[Sendify PRO Lote] {count} reportes de {rule_name}';
+    let bodyTemplate = ruleConfig?.emailBodyGrouped || 'Se han procesado {count} coincidencias para la regla {rule_name}:\n\n{grouped_content}';
+
+    const subject = subjectTemplate
+      .replace(/{count}/g, items.length.toString())
+      .replace(/{rule_name}/g, first.caseType);
     
     const uniqueBodies = new Set<string>();
     const attachments: { filename: string, content: Buffer }[] = [];
@@ -814,8 +862,12 @@ async function processEmailQueue() {
     });
 
     const combinedBody = Array.from(uniqueBodies).join('\n\n');
+    const finalBody = bodyTemplate
+      .replace(/{count}/g, items.length.toString())
+      .replace(/{rule_name}/g, first.caseType)
+      .replace(/{grouped_content}/g, combinedBody);
 
-    const sent = await sendEmail(subject, combinedBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true, first.caseType);
+    const sent = await sendEmail(subject, finalBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true, first.caseType);
     if (sent) {
       log('INFO', `✅ Lote de ${items.length} correos enviado a ${first.to}`);
       successfullySentKeys.push(key);

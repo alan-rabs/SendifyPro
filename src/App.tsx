@@ -82,6 +82,8 @@ interface AutomationRule {
   emailTargets: string;
   emailSubject: string;
   emailBody: string;
+  emailSubjectGrouped?: string;
+  emailBodyGrouped?: string;
   emailAttachmentName?: string;
   waEnabled: boolean;
   waTargets: string;
@@ -503,6 +505,8 @@ export default function App() {
       emailTargets: '',
       emailSubject: 'Alerta: Coincidencia detectada',
       emailBody: 'Se ha detectado una coincidencia en el mensaje: {original_message}',
+      emailSubjectGrouped: '[Sendify PRO Lote] {count} reportes de {rule_name}',
+      emailBodyGrouped: 'Se han procesado {count} coincidencias para la regla {rule_name}:\n\n{grouped_content}',
       waEnabled: false,
       waTargets: '',
       waMessage: 'Alerta: Coincidencia detectada en el mensaje: {original_message}'
@@ -1626,17 +1630,38 @@ export default function App() {
                                                   />
                                                   <input 
                                                     type="text" 
-                                                    placeholder="Asunto"
+                                                    placeholder="Asunto (Individual)"
                                                     value={rule.emailSubject} 
                                                     onChange={e => updateRule(chat.id, rule.id, 'emailSubject', e.target.value)}
                                                     className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
                                                   />
                                                   <textarea 
-                                                    placeholder="Cuerpo del mensaje"
+                                                    placeholder="Cuerpo del mensaje (Individual)"
                                                     value={rule.emailBody} 
                                                     onChange={e => updateRule(chat.id, rule.id, 'emailBody', e.target.value)}
                                                     className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none h-12 resize-none"
                                                   />
+                                                  
+                                                  {config.emailBatchingEnabled && (
+                                                    <div className="pt-2 border-t border-zinc-800/50 space-y-2">
+                                                      <label className="text-[9px] text-zinc-500 font-bold uppercase flex items-center gap-1">
+                                                        <Layers className="w-3 h-3" /> Configuración para Lotes (Agrupados)
+                                                      </label>
+                                                      <input 
+                                                        type="text" 
+                                                        placeholder="Asunto (Agrupado)"
+                                                        value={rule.emailSubjectGrouped || ''} 
+                                                        onChange={e => updateRule(chat.id, rule.id, 'emailSubjectGrouped', e.target.value)}
+                                                        className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none"
+                                                      />
+                                                      <textarea 
+                                                        placeholder="Cuerpo del mensaje (Agrupado) - Usa {grouped_content} para insertar los mensajes"
+                                                        value={rule.emailBodyGrouped || ''} 
+                                                        onChange={e => updateRule(chat.id, rule.id, 'emailBodyGrouped', e.target.value)}
+                                                        className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-[10px] outline-none h-12 resize-none"
+                                                      />
+                                                    </div>
+                                                  )}
                                                   <div className="space-y-1">
                                                     <label className="text-[9px] text-zinc-500 font-bold uppercase">Nombre del PDF (Opcional)</label>
                                                     <input 
