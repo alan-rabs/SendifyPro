@@ -581,15 +581,15 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
     let totalFalsePositives = 0;
     (global as any).sweepRecoveredItems = [];
 
-    const targetDateObj = new Date(targetDate);
+    const [tYear, tMonth, tDay] = targetDate.split('-').map(Number);
     // Start of the target day
-    const startOfDay = new Date(targetDateObj.getFullYear(), targetDateObj.getMonth(), targetDateObj.getDate(), 0, 0, 0).getTime() / 1000;
+    const startOfDay = new Date(tYear, tMonth - 1, tDay, 0, 0, 0).getTime() / 1000;
     
     // End of the target day (or end date)
     let endOfDay = startOfDay + 86400;
     if (endDate) {
-      const endDateObj = new Date(endDate);
-      endOfDay = new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate(), 23, 59, 59).getTime() / 1000;
+      const [eYear, eMonth, eDay] = endDate.split('-').map(Number);
+      endOfDay = new Date(eYear, eMonth - 1, eDay, 23, 59, 59).getTime() / 1000;
     }
 
     for (const chat of chats) {
@@ -606,7 +606,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
       
       // Fetch a large number of messages to ensure we cover the date
       // If endDate is provided, we might need more messages
-      const fetchLimit = endDate ? 2000 : 500;
+      const fetchLimit = endDate ? 3000 : 1000;
       const messages = await chat.fetchMessages({ limit: fetchLimit });
       
       for (const msg of messages) {
@@ -622,10 +622,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
           const isMarkedProcessed = db.isMessageProcessed(msg.id._serialized);
           
           // We need to re-evaluate the message to see if it SHOULD have been processed
-          // This is a simplified check. Ideally, we'd run the full rule engine without side effects.
-          // For now, we'll check if it matches any basic criteria (has media or matches text rules)
           let shouldBeProcessed = false;
-          let matchedRule = null;
           
           const rules = chatConfig.rules || [];
           if (rules.length > 0) {
@@ -633,14 +630,30 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
                 shouldBeProcessed = true; // Simplified: assume all media in configured chats should be processed
              } else if (msg.body) {
                 // Check text rules
+                const fullText = msg.body.trim().toLowerCase();
+                const lines = msg.body.split('\n').map(l => l.trim().toLowerCase());
+                
                 for (const rule of rules) {
-                  if (rule.type === 'text' && rule.textMatch) {
-                    const regex = new RegExp(rule.textMatch, 'i');
-                    if (regex.test(msg.body)) {
-                      shouldBeProcessed = true;
-                      matchedRule = rule;
-                      break;
+                  if (rule.type === 'text') {
+                    const trigger = (rule.triggerValue || '').trim().toLowerCase();
+                    if (!trigger) continue;
+
+                    if (rule.subtype === 'exact' && fullText === trigger) { shouldBeProcessed = true; break; }
+                    if (rule.subtype === 'contains' && fullText.includes(trigger)) { shouldBeProcessed = true; break; }
+                    if (rule.subtype === 'regex') {
+                      try { const re = new RegExp(trigger, 'i'); if (re.test(fullText)) { shouldBeProcessed = true; break; } } catch(e) {}
                     }
+
+                    if (!shouldBeProcessed) {
+                      for (const line of lines) {
+                        if (rule.subtype === 'exact' && line === trigger) { shouldBeProcessed = true; break; }
+                        if (rule.subtype === 'contains' && line.includes(trigger)) { shouldBeProcessed = true; break; }
+                        if (rule.subtype === 'regex') {
+                          try { const re = new RegExp(trigger, 'i'); if (re.test(line)) { shouldBeProcessed = true; break; } } catch(e) {}
+                        }
+                      }
+                    }
+                    if (shouldBeProcessed) break;
                   }
                 }
              }
