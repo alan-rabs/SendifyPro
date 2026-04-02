@@ -366,8 +366,8 @@ export function resetAllMetrics() {
   try {
     // Reset stats to 0
     db.prepare("UPDATE stats SET value = 0 WHERE key IN ('processedPdfs', 'emailsSent', 'errorsDetected')").run();
-    // Clear recent errors
-    db.prepare("DELETE FROM recent_errors").run();
+    // Clear recent errors (stored in metadata)
+    db.prepare("DELETE FROM metadata WHERE key = 'recent_errors'").run();
     // Clear email queue
     db.prepare("DELETE FROM email_queue").run();
     // Clear last processed file metadata

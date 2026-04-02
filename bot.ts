@@ -543,13 +543,14 @@ async function processMessage(msg: any): Promise<boolean> {
           
           let waMedia = null;
           if (msg.hasMedia && media) {
-            waMedia = { ...media };
             const firstMatch = matchesToProcess[0];
+            let customFilename = media.filename;
             if (rule.waAttachmentName) {
               const customName = replacePlaceholders(rule.waAttachmentName, firstMatch.text, firstMatch.nss, firstMatch.curp, rule.name);
               const ext = (media.filename || '').split('.').pop() || 'bin';
-              waMedia.filename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
+              customFilename = customName.endsWith(`.${ext}`) ? customName : `${customName}.${ext}`;
             }
+            waMedia = new pkg.MessageMedia(media.mimetype, media.data, customFilename, media.filesize);
           }
 
           const sent = await sendToWhatsAppChats(rule.waTargets, combinedWaMsg, waMedia);
