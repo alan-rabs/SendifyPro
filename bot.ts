@@ -312,6 +312,7 @@ async function processMessage(msg: any): Promise<boolean> {
 
     let didProcessSomething = false;
     let media: any = null;
+    const originalMessageBody = msg.body || '';
     let textContent = msg.body || '';
     let processingError = false;
 
@@ -381,7 +382,7 @@ async function processMessage(msg: any): Promise<boolean> {
     for (const rule of rules) {
       log('DEBUG', `Probando regla "${rule.name}" (Tipo: ${rule.type}, Subtipo: ${rule.subtype})`);
 
-      let matchesToProcess: { text: string, nss: string, curp: string }[] = [];
+      let matchesToProcess: { text: string, nss: string, curp: string, originalMsg: string }[] = [];
 
       if (rule.type === 'text') {
         const trigger = (rule.triggerValue || '').trim();
@@ -404,7 +405,7 @@ async function processMessage(msg: any): Promise<boolean> {
 
         if (isGlobalMatch) {
           log('DEBUG', `✅ Regla de texto "${rule.name}" coincide globalmente.`);
-          matchesToProcess.push({ text: textContent, nss: globalNss, curp: globalCurp });
+          matchesToProcess.push({ text: textContent, nss: globalNss, curp: globalCurp, originalMsg: originalMessageBody });
         } else {
           // 2. Si no coincide globalmente, intentar POR LÍNEA
           for (const line of lines) {
@@ -430,7 +431,8 @@ async function processMessage(msg: any): Promise<boolean> {
               matchesToProcess.push({
                 text: text,
                 nss: lineNssMatch ? lineNssMatch[0] : globalNss,
-                curp: lineCurpMatch ? lineCurpMatch[0].toUpperCase() : globalCurp
+                curp: lineCurpMatch ? lineCurpMatch[0].toUpperCase() : globalCurp,
+                originalMsg: originalMessageBody
               });
             }
           }
@@ -478,7 +480,7 @@ async function processMessage(msg: any): Promise<boolean> {
         }
 
         if (isMatch) {
-          matchesToProcess.push({ text: textContent, nss: globalNss, curp: globalCurp });
+          matchesToProcess.push({ text: textContent, nss: globalNss, curp: globalCurp, originalMsg: originalMessageBody });
         }
       }
 
@@ -496,12 +498,12 @@ async function processMessage(msg: any): Promise<boolean> {
         // Recopilar todos los cuerpos de mensaje únicos para esta regla
         for (const match of matchesToProcess) {
           if (rule.emailEnabled) {
-            emailSubject = replacePlaceholders(rule.emailSubject || 'Alerta de Regla: {rule_name}', match.text, match.nss, match.curp, rule.name);
-            const body = replacePlaceholders(rule.emailBody || 'Se ha detectado una coincidencia con la regla {rule_name}.', match.text, match.nss, match.curp, rule.name);
+            emailSubject = replacePlaceholders(rule.emailSubject || 'Alerta de Regla: {rule_name}', match.originalMsg, match.nss, match.curp, rule.name);
+            const body = replacePlaceholders(rule.emailBody || 'Se ha detectado una coincidencia con la regla {rule_name}.', match.originalMsg, match.nss, match.curp, rule.name);
             uniqueEmailBodies.add(body.trim());
           }
           if (rule.waEnabled) {
-            const waMsg = replacePlaceholders(rule.waMessage || 'Regla disparada: {rule_name}', match.text, match.nss, match.curp, rule.name);
+            const waMsg = replacePlaceholders(rule.waMessage || 'Regla disparada: {rule_name}', match.originalMsg, match.nss, match.curp, rule.name);
             uniqueWaBodies.add(waMsg.trim());
           }
         }
