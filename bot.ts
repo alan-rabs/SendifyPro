@@ -1073,6 +1073,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
       const chat = chats.find((c: any) => c.name === name || c.name === name.trim());
       if (chat) {
         log('INFO', `📱 Reenviando mensaje a: "${name}"...`);
+        log('DEBUG', `Contenido del mensaje a enviar a "${name}": "${message}"`);
         if (media) {
           await chat.sendMessage(media, { caption: message });
         } else {
