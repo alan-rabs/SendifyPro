@@ -380,6 +380,10 @@ async function processMessage(msg: any): Promise<boolean> {
     const lines = textContent.split('\n').filter(l => l.trim() !== '');
 
     for (const rule of rules) {
+      if (rule.enabled === false) {
+        log('DEBUG', `Regla "${rule.name}" está deshabilitada. Saltando...`);
+        continue;
+      }
       log('DEBUG', `Probando regla "${rule.name}" (Tipo: ${rule.type}, Subtipo: ${rule.subtype})`);
 
       let matchesToProcess: { text: string, nss: string, curp: string, originalMsg: string }[] = [];
@@ -693,6 +697,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
                 const lines = msg.body.split('\n').map(l => l.trim().toLowerCase());
                 
                 for (const rule of rules) {
+                  if (rule.enabled === false) continue;
                   if (rule.type === 'text') {
                     const trigger = (rule.triggerValue || '').trim().toLowerCase();
                     if (!trigger) continue;

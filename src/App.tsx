@@ -76,6 +76,7 @@ interface LogEntry {
 interface AutomationRule {
   id: string;
   name: string;
+  enabled?: boolean;
   type: 'text' | 'file';
   subtype: string; // 'exact', 'contains', 'regex' for text; 'pdf', 'image', 'video', 'doc', 'any' for file
   triggerValue: string;
@@ -546,6 +547,7 @@ export default function App() {
     const newRule: AutomationRule = {
       id: Math.random().toString(36).substr(2, 9),
       name: 'Nueva Regla',
+      enabled: true,
       type: 'text',
       subtype: 'contains',
       triggerValue: '',
@@ -1588,7 +1590,7 @@ export default function App() {
 
                                   <div className="space-y-3">
                                     {(chat.rules || []).map((rule) => (
-                                      <div key={rule.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-4">
+                                      <div key={rule.id} className={`bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-4 transition-opacity ${rule.enabled === false ? 'opacity-50 grayscale-[0.5]' : ''}`}>
                                         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
                                           <div className="flex items-center gap-3">
                                             <Zap size={16} className="text-amber-500" />
@@ -1599,12 +1601,21 @@ export default function App() {
                                               className="bg-transparent border-none outline-none text-sm font-bold text-zinc-100 focus:ring-0 p-0 w-48"
                                             />
                                           </div>
-                                          <button 
-                                            onClick={() => removeRule(chat.id, rule.id)}
-                                            className="p-1.5 text-zinc-600 hover:text-rose-500 transition-colors"
-                                          >
-                                            <Trash2 size={14} />
-                                          </button>
+                                          <div className="flex items-center gap-3">
+                                            <button
+                                              onClick={() => updateRule(chat.id, rule.id, 'enabled', rule.enabled === false ? true : false)}
+                                              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${rule.enabled !== false ? 'bg-emerald-500' : 'bg-zinc-700'}`}
+                                              title={rule.enabled !== false ? "Regla activada" : "Regla desactivada"}
+                                            >
+                                              <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${rule.enabled !== false ? 'translate-x-5' : 'translate-x-1'}`} />
+                                            </button>
+                                            <button 
+                                              onClick={() => removeRule(chat.id, rule.id)}
+                                              className="p-1.5 text-zinc-600 hover:text-rose-500 transition-colors"
+                                            >
+                                              <Trash2 size={14} />
+                                            </button>
+                                          </div>
                                         </div>
 
                                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
