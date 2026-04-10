@@ -244,12 +244,18 @@ export async function startBot() {
                 } catch (fetchErr: any) {
                   if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
                     consecutiveErrors++;
-                    if (consecutiveErrors > 5) {
+                    if (consecutiveErrors > 10) { // Increased max retries
                       log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación para este chat.`);
                       break;
                     }
-                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Esperando 3 segundos antes de reintentar...`);
-                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 10 segundos antes de reintentar...`);
+                    try { 
+                      await targetChat.syncHistory(); 
+                      if (client && client.interface) {
+                        await client.interface.openChatWindow(targetChat.id._serialized);
+                      }
+                    } catch (e) { /* ignore */ }
+                    await new Promise(resolve => setTimeout(resolve, 10000)); // Increased wait time to 10 seconds
                   } else {
                     log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
                     break;
@@ -283,12 +289,18 @@ export async function startBot() {
                 } catch (fetchErr: any) {
                   if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
                     consecutiveErrors++;
-                    if (consecutiveErrors > 5) {
+                    if (consecutiveErrors > 10) {
                       log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación.`);
                       break;
                     }
-                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Esperando 3 segundos...`);
-                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 10 segundos...`);
+                    try { 
+                      await targetChat.syncHistory(); 
+                      if (client && client.interface) {
+                        await client.interface.openChatWindow(targetChat.id._serialized);
+                      }
+                    } catch (e) { /* ignore */ }
+                    await new Promise(resolve => setTimeout(resolve, 10000));
                   } else {
                     log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
                     break;
@@ -374,6 +386,9 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
       };
 
       const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
+      if (!chatObj) throw new Error('Chat object not found in WWebJS');
+      if (!chatObj.msgs) throw new Error('Chat object has no msgs property');
+
       let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
 
       if (searchOptions && searchOptions.limit > 0) {
@@ -381,9 +396,12 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
           let loadedMessages;
           try {
             loadedMessages = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-          } catch (err) {
-            console.error('Error loading earlier msgs:', err);
-            break; // Stop trying to load more if it fails, just return what we have
+          } catch (err: any) {
+            if (err && err.message && err.message.includes('waitForChatLoading')) {
+              throw err; // Re-throw to let the outer loop handle retries
+            }
+            console.error('Error loading earlier msgs:', err.message);
+            break; // Stop trying to load more if it fails with other errors, just return what we have
           }
           if (!loadedMessages || !loadedMessages.length) break;
           msgs = [...loadedMessages.filter(msgFilter), ...msgs];
@@ -400,7 +418,8 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
 
     const { Message } = pkg;
     return messages.map((m: any) => new Message(client, m));
-  } catch (err) {
+  } catch (err: any) {
+    console.error(`[safeFetchMessages] Evaluate failed for chat ${chat.name}:`, err.message);
     // Fallback to the original method if evaluate fails completely
     return await chat.fetchMessages(searchOptions);
   }
@@ -807,12 +826,18 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
         } catch (fetchErr: any) {
           if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
             consecutiveErrors++;
-            if (consecutiveErrors > 5) {
+            if (consecutiveErrors > 10) {
               log('ERROR', `Demasiados errores al cargar el chat "${chat.name}". Abortando barrido para este chat.`);
               break;
             }
-            log('WARN', `El chat "${chat.name}" aún está cargando. Esperando 3 segundos antes de reintentar...`);
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            log('WARN', `El chat "${chat.name}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 10 segundos antes de reintentar...`);
+            try { 
+              await chat.syncHistory(); 
+              if (client && client.interface) {
+                await client.interface.openChatWindow(chat.id._serialized);
+              }
+            } catch (e) { /* ignore */ }
+            await new Promise(resolve => setTimeout(resolve, 10000));
           } else {
             log('ERROR', `Error inesperado al buscar mensajes en "${chat.name}": ${fetchErr.message}`);
             break;
