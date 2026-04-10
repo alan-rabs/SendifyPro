@@ -118,6 +118,8 @@ interface AuditTemplate {
   schedule: string; // Time of day e.g. '23:59'
   frequency?: 'daily' | 'weekly' | 'monthly';
   timeRange?: 'today' | 'yesterday' | 'this_week' | 'last_week' | 'this_month' | 'last_month';
+  rules?: string[]; // Array of rule names to filter
+  splitByRule?: boolean; // Generate XLSX with separate sheets per rule
 }
 
 interface Config {
@@ -1898,7 +1900,9 @@ export default function App() {
                             waEnabled: false,
                             waTargets: '',
                             waMessage: 'Reporte: {template_name} - {date}\nTotal de registros: {count}',
-                            schedule: '23:59'
+                            schedule: '23:59',
+                            frequency: 'daily',
+                            timeRange: 'yesterday'
                           };
                           setConfig({ ...config, auditTemplates: [...(config.auditTemplates || []), newTemplate] });
                         }}
@@ -1964,6 +1968,52 @@ export default function App() {
                                     </button>
                                   ))}
                                 </div>
+                              </div>
+                              <div className="space-y-2">
+                                <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Filtro por Reglas (Opcional)</label>
+                                <div className="flex flex-wrap gap-2">
+                                  {Array.from(new Set(config?.chatConfigs.flatMap(c => c.rules.map(r => r.name)) || [])).map(ruleName => (
+                                    <button 
+                                      key={ruleName}
+                                      onClick={() => {
+                                        if (!config) return;
+                                        const currentRules = template.rules || [];
+                                        const newRules = currentRules.includes(ruleName) 
+                                          ? currentRules.filter(r => r !== ruleName)
+                                          : [...currentRules, ruleName];
+                                        setConfig({
+                                          ...config,
+                                          auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, rules: newRules } : t)
+                                        });
+                                      }}
+                                      className={`px-3 py-1 rounded-full text-[10px] font-bold transition-all ${template.rules?.includes(ruleName) ? 'bg-purple-600 text-white' : 'bg-zinc-900 text-zinc-500 border border-zinc-800'}`}
+                                    >
+                                      {ruleName}
+                                    </button>
+                                  ))}
+                                </div>
+                                <p className="text-[10px] text-zinc-500 italic">Si no seleccionas ninguna, se incluirán todas las reglas.</p>
+                                
+                                {template.rules && template.rules.length > 0 && (
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <input 
+                                      type="checkbox" 
+                                      id={`split-${template.id}`}
+                                      checked={template.splitByRule || false} 
+                                      onChange={e => {
+                                        if (!config) return;
+                                        setConfig({
+                                          ...config,
+                                          auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, splitByRule: e.target.checked } : t)
+                                        });
+                                      }}
+                                      className="w-3.5 h-3.5 accent-purple-500"
+                                    />
+                                    <label htmlFor={`split-${template.id}`} className="text-xs text-zinc-300 cursor-pointer">
+                                      Generar Excel (XLSX) con una hoja por cada regla
+                                    </label>
+                                  </div>
+                                )}
                               </div>
                               <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1.5">

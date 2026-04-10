@@ -9,6 +9,7 @@ import cron from 'node-cron';
 import { createRequire } from 'module';
 import * as db from './db.js';
 import { getAuditLogs } from './db.js';
+import * as XLSX from 'xlsx';
 // import { getAuditLogs } from './db.js'; // Commented out to avoid circular dependency
 
 import { PDFParse } from 'pdf-parse';
@@ -1124,7 +1125,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
 }
 
 // Función para generar un CSV personalizado basado en una plantilla desde SQLite
-function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today'): { content: string, count: number } | null {
+function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today', rules?: string[], splitByRule?: boolean): { content: string | Buffer, count: number, isXlsx: boolean } | null {
   const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
   if (logs.length === 0) return null;
 
@@ -1179,18 +1180,28 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today')
   }
 
   const filteredLogs = logs.filter((log: any) => {
+    if (rules && rules.length > 0 && !rules.includes(log.action_type)) {
+      return false;
+    }
+
     let logDate;
     try {
-      // log.timestamp is usually "DD/MM/YYYY, HH:mm:ss"
+      // log.timestamp is usually "DD/MM/YYYY, HH:mm:ss" or "DD/MM/YYYY, HH:mm:ss a.m."
       const parts = log.timestamp.split(/[, ]+/);
       const dateParts = parts[0].split('/');
       if (dateParts.length === 3) {
+        let hours = parts[1] ? parseInt(parts[1].split(':')[0]) : 0;
+        const isPM = parts[2] && parts[2].toLowerCase().includes('p');
+        const isAM = parts[2] && parts[2].toLowerCase().includes('a');
+        if (isPM && hours < 12) hours += 12;
+        if (isAM && hours === 12) hours = 0;
+
         // Parse as local time, not UTC
         logDate = new Date(
           parseInt(dateParts[2]), 
           parseInt(dateParts[1]) - 1, 
           parseInt(dateParts[0]),
-          parts[1] ? parseInt(parts[1].split(':')[0]) : 0,
+          hours,
           parts[1] ? parseInt(parts[1].split(':')[1]) : 0,
           parts[1] ? parseInt(parts[1].split(':')[2]) : 0
         );
@@ -1207,8 +1218,7 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today')
 
   if (filteredLogs.length === 0) return null;
 
-  const header = columns.join(',');
-  const rows = filteredLogs.map((log: any) => {
+  const mapLogToRow = (log: any) => {
     return columns.map(col => {
       let val = '';
       const colLower = col.toLowerCase();
@@ -1231,14 +1241,45 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today')
       }
       else if (colLower === 'execution_type' || colLower === 'ejecucion' || colLower === 'ejecución') val = log.execution_type || 'Tiempo real';
       
-      return `"${val.replace(/"/g, '""')}"`;
-    }).join(',');
-  });
-
-  return {
-    content: '\uFEFF' + header + '\n' + rows.join('\n'),
-    count: filteredLogs.length
+      return val;
+    });
   };
+
+  if (splitByRule) {
+    const wb = XLSX.utils.book_new();
+    const rulesPresent = Array.from(new Set(filteredLogs.map((l: any) => l.action_type)));
+    
+    rulesPresent.forEach((ruleName: string) => {
+      const ruleLogs = filteredLogs.filter((l: any) => l.action_type === ruleName);
+      const rows = ruleLogs.map(mapLogToRow);
+      // Add header row
+      rows.unshift(columns);
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      
+      let safeSheetName = ruleName.replace(/[\\/?*\[\]]/g, '').substring(0, 31);
+      if (!safeSheetName) safeSheetName = 'Sheet';
+      
+      XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
+    });
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    return {
+      content: buffer,
+      count: filteredLogs.length,
+      isXlsx: true
+    };
+  } else {
+    const header = columns.join(',');
+    const rows = filteredLogs.map((log: any) => {
+      return mapLogToRow(log).map(val => `"${val.replace(/"/g, '""')}"`).join(',');
+    });
+
+    return {
+      content: '\uFEFF' + header + '\n' + rows.join('\n'),
+      count: filteredLogs.length,
+      isXlsx: false
+    };
+  }
 }
 
 // Programar tareas para reportes y plantillas personalizadas
@@ -1314,13 +1355,15 @@ setInterval(async () => {
         
         log('INFO', `Iniciando tarea programada para plantilla: "${template.name}"`);
         
-        const csvResult = generateCustomCsvFromDb(template.columns, template.timeRange || 'today');
+        const csvResult = generateCustomCsvFromDb(template.columns, template.timeRange || 'today', template.rules, template.splitByRule);
         if (!csvResult) {
           log('INFO', `No hay datos para la plantilla "${template.name}" en el rango de tiempo especificado.`);
           return;
         }
 
-        const csvBuffer = Buffer.from(csvResult.content);
+        const fileBuffer = Buffer.isBuffer(csvResult.content) ? csvResult.content : Buffer.from(csvResult.content);
+        const fileExtension = csvResult.isXlsx ? 'xlsx' : 'csv';
+        const mimeType = csvResult.isXlsx ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv';
         
         const replaceVars = (str: string) => {
           return str
@@ -1334,12 +1377,12 @@ setInterval(async () => {
         const waMessage = template.waMessage ? replaceVars(template.waMessage) : `Reporte: ${template.name} - ${dateStr}\nTotal de registros: ${csvResult.count}`;
 
         if (template.emailEnabled && template.emailTargets) {
-          await sendEmail(emailSubject, emailBody, [{ filename: `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`, content: csvBuffer }], template.emailTargets);
+          await sendEmail(emailSubject, emailBody, [{ filename: `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.${fileExtension}`, content: fileBuffer }], template.emailTargets);
         }
 
         if (template.waEnabled && template.waTargets) {
           const { MessageMedia } = pkg;
-          const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`);
+          const media = new MessageMedia(mimeType, fileBuffer.toString('base64'), `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.${fileExtension}`);
           await sendToWhatsAppChats(template.waTargets, waMessage, media);
         }
       }
