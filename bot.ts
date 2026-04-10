@@ -223,7 +223,7 @@ export async function startBot() {
 
               while (!reachedTargetDate && currentLimit <= 5000) {
                 try {
-                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
+                  const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
                   messages = batch;
                   
                   if (batch.length === 0 || batch.length === lastMessageCount) {
@@ -269,7 +269,7 @@ export async function startBot() {
 
               while (currentLimit <= targetLimit) {
                 try {
-                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
+                  const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
                   messages = batch;
                   
                   if (batch.length === 0 || batch.length === lastMessageCount || batch.length >= targetLimit) {
@@ -361,6 +361,48 @@ export async function startBot() {
     log('ERROR', `Error al inicializar el cliente: ${err.message}`);
     botStatus = 'error';
     client = null;
+  }
+}
+
+async function safeFetchMessages(chat: any, searchOptions: any) {
+  try {
+    let messages = await client.pupPage.evaluate(async (chatId: string, searchOptions: any) => {
+      const msgFilter = (m: any) => {
+        if (m.isNotification) return false;
+        if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
+        return true;
+      };
+
+      const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
+      let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
+
+      if (searchOptions && searchOptions.limit > 0) {
+        while (msgs.length < searchOptions.limit) {
+          let loadedMessages;
+          try {
+            loadedMessages = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+          } catch (err) {
+            console.error('Error loading earlier msgs:', err);
+            break; // Stop trying to load more if it fails, just return what we have
+          }
+          if (!loadedMessages || !loadedMessages.length) break;
+          msgs = [...loadedMessages.filter(msgFilter), ...msgs];
+        }
+        
+        if (msgs.length > searchOptions.limit) {
+          msgs.sort((a: any, b: any) => (a.t > b.t) ? 1 : -1);
+          msgs = msgs.splice(msgs.length - searchOptions.limit);
+        }
+      }
+
+      return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
+    }, chat.id._serialized, searchOptions);
+
+    const { Message } = pkg;
+    return messages.map((m: any) => new Message(client, m));
+  } catch (err) {
+    // Fallback to the original method if evaluate fails completely
+    return await chat.fetchMessages(searchOptions);
   }
 }
 
@@ -746,7 +788,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
       while (!reachedTargetDate && currentLimit <= maxLimit) {
         try {
-          const batch = await chat.fetchMessages({ limit: currentLimit });
+          const batch = await safeFetchMessages(chat, { limit: currentLimit });
           messages = batch;
           
           if (batch.length === 0 || batch.length === lastMessageCount) {
