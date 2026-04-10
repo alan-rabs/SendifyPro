@@ -225,7 +225,12 @@ export async function startBot() {
                   batch = await targetChat.fetchMessages({ limit: 1000 });
                 } catch (fetchErr2: any) {
                   log('WARN', `Error al buscar 1000 mensajes en "${chatConf.targetContact}": ${fetchErr2.message}. Intentando con 100...`);
-                  batch = await targetChat.fetchMessages({ limit: 100 });
+                  try {
+                    batch = await targetChat.fetchMessages({ limit: 100 });
+                  } catch (fetchErr3: any) {
+                    log('ERROR', `Fallo definitivo al buscar historial en "${chatConf.targetContact}": ${fetchErr3.message}. Se omitirá este chat en la recuperación inicial.`);
+                    batch = []; // Fallback to empty array to avoid crashing the loop
+                  }
                 }
               }
               messages = batch.filter((m: any) => m.timestamp >= targetTimestamp);
@@ -1176,10 +1181,19 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today')
   const filteredLogs = logs.filter((log: any) => {
     let logDate;
     try {
+      // log.timestamp is usually "DD/MM/YYYY, HH:mm:ss"
       const parts = log.timestamp.split(/[, ]+/);
       const dateParts = parts[0].split('/');
       if (dateParts.length === 3) {
-        logDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '00:00:00'}`);
+        // Parse as local time, not UTC
+        logDate = new Date(
+          parseInt(dateParts[2]), 
+          parseInt(dateParts[1]) - 1, 
+          parseInt(dateParts[0]),
+          parts[1] ? parseInt(parts[1].split(':')[0]) : 0,
+          parts[1] ? parseInt(parts[1].split(':')[1]) : 0,
+          parts[1] ? parseInt(parts[1].split(':')[2]) : 0
+        );
       } else {
         logDate = new Date(log.timestamp);
       }
