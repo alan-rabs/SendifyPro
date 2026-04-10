@@ -1124,7 +1124,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
 }
 
 // Función para generar un CSV personalizado basado en una plantilla desde SQLite
-function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today'): string | null {
+function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today'): { content: string, count: number } | null {
   const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
   if (logs.length === 0) return null;
 
@@ -1235,7 +1235,10 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today')
     }).join(',');
   });
 
-  return '\uFEFF' + header + '\n' + rows.join('\n');
+  return {
+    content: '\uFEFF' + header + '\n' + rows.join('\n'),
+    count: filteredLogs.length
+  };
 }
 
 // Programar tareas para reportes y plantillas personalizadas
@@ -1251,13 +1254,13 @@ setInterval(async () => {
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global Email)...');
     
     const columns = ['Timestamp', 'Hora', 'Conversacion', 'Regla', 'NSS', 'CURP', 'Mensaje', 'Status', 'Ejecución'];
-    const csvContent = generateCustomCsvFromDb(columns);
+    const csvResult = generateCustomCsvFromDb(columns);
 
-    if (csvContent) {
+    if (csvResult) {
       try {
-        const csvBuffer = Buffer.from(csvContent);
+        const csvBuffer = Buffer.from(csvResult.content);
         const subject = `Reporte de Auditoría WhatsApp Bot (Email) - ${dateStr}`;
-        const text = `Adjunto el reporte de auditoría global de los eventos procesados el día de hoy (${dateStr}).`;
+        const text = `Adjunto el reporte de auditoría global de los eventos procesados el día de hoy (${dateStr}). Total de registros: ${csvResult.count}`;
         await sendEmail(subject, text, [{ filename: `audit_global_${dateStr}.csv`, content: csvBuffer }], config.auditEmailTargets);
       } catch (err: any) {
         log('ERROR', `Error en reporte diario global Email: ${err.message}`);
@@ -1272,12 +1275,12 @@ setInterval(async () => {
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global WhatsApp)...');
     
     const columns = ['Timestamp', 'Hora', 'Conversacion', 'Regla', 'NSS', 'CURP', 'Mensaje', 'Status', 'Ejecución'];
-    const csvContent = generateCustomCsvFromDb(columns);
+    const csvResult = generateCustomCsvFromDb(columns);
 
-    if (csvContent) {
+    if (csvResult) {
       try {
-        const csvBuffer = Buffer.from(csvContent);
-        const subject = `Reporte de Auditoría WhatsApp Bot (WhatsApp) - ${dateStr}`;
+        const csvBuffer = Buffer.from(csvResult.content);
+        const subject = `Reporte de Auditoría WhatsApp Bot (WhatsApp) - ${dateStr}\nTotal de registros: ${csvResult.count}`;
         const { MessageMedia } = pkg;
         const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `audit_global_${dateStr}.csv`);
         await sendToWhatsAppChats(config.auditWaTargets, subject, media);
@@ -1311,24 +1314,33 @@ setInterval(async () => {
         
         log('INFO', `Iniciando tarea programada para plantilla: "${template.name}"`);
         
-        const customCsv = generateCustomCsvFromDb(template.columns, template.timeRange || 'today');
-        if (!customCsv) {
+        const csvResult = generateCustomCsvFromDb(template.columns, template.timeRange || 'today');
+        if (!csvResult) {
           log('INFO', `No hay datos para la plantilla "${template.name}" en el rango de tiempo especificado.`);
           return;
         }
 
-        const csvBuffer = Buffer.from(customCsv);
-        const subject = `Reporte: ${template.name} - ${dateStr}`;
-        const text = `Adjunto el reporte personalizado "${template.name}" generado automáticamente.`;
+        const csvBuffer = Buffer.from(csvResult.content);
+        
+        const replaceVars = (str: string) => {
+          return str
+            .replace(/{count}/g, csvResult.count.toString())
+            .replace(/{date}/g, dateStr)
+            .replace(/{template_name}/g, template.name);
+        };
+
+        const emailSubject = template.emailSubject ? replaceVars(template.emailSubject) : `Reporte: ${template.name} - ${dateStr}`;
+        const emailBody = template.emailBody ? replaceVars(template.emailBody) : `Adjunto el reporte personalizado "${template.name}" generado automáticamente.\nTotal de registros: ${csvResult.count}`;
+        const waMessage = template.waMessage ? replaceVars(template.waMessage) : `Reporte: ${template.name} - ${dateStr}\nTotal de registros: ${csvResult.count}`;
 
         if (template.emailEnabled && template.emailTargets) {
-          await sendEmail(subject, text, [{ filename: `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`, content: csvBuffer }], template.emailTargets);
+          await sendEmail(emailSubject, emailBody, [{ filename: `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`, content: csvBuffer }], template.emailTargets);
         }
 
         if (template.waEnabled && template.waTargets) {
           const { MessageMedia } = pkg;
           const media = new MessageMedia('text/csv', csvBuffer.toString('base64'), `reporte_${template.name.replace(/\s+/g, '_')}_${dateStr}.csv`);
-          await sendToWhatsAppChats(template.waTargets, subject, media);
+          await sendToWhatsAppChats(template.waTargets, waMessage, media);
         }
       }
     });

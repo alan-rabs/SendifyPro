@@ -110,8 +110,11 @@ interface AuditTemplate {
   columns: string[];
   emailEnabled: boolean;
   emailTargets: string;
+  emailSubject?: string;
+  emailBody?: string;
   waEnabled: boolean;
   waTargets: string;
+  waMessage?: string;
   schedule: string; // Time of day e.g. '23:59'
   frequency?: 'daily' | 'weekly' | 'monthly';
   timeRange?: 'today' | 'yesterday' | 'this_week' | 'last_week' | 'this_month' | 'last_month';
@@ -1890,8 +1893,11 @@ export default function App() {
                             columns: ['date', 'time', 'contact', 'nss', 'curp', 'status'],
                             emailEnabled: false,
                             emailTargets: '',
+                            emailSubject: 'Reporte: {template_name} - {date}',
+                            emailBody: 'Adjunto el reporte personalizado "{template_name}" generado automáticamente.\nTotal de registros: {count}',
                             waEnabled: false,
                             waTargets: '',
+                            waMessage: 'Reporte: {template_name} - {date}\nTotal de registros: {count}',
                             schedule: '23:59'
                           };
                           setConfig({ ...config, auditTemplates: [...(config.auditTemplates || []), newTemplate] });
@@ -2051,6 +2057,35 @@ export default function App() {
                                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:border-zinc-500 outline-none transition-all"
                                   disabled={!template.emailEnabled}
                                 />
+                                {template.emailEnabled && (
+                                  <>
+                                    <input 
+                                      type="text" 
+                                      placeholder="Asunto del correo (ej. Reporte: {template_name})"
+                                      value={template.emailSubject || ''} 
+                                      onChange={e => {
+                                        if (!config) return;
+                                        setConfig({
+                                          ...config,
+                                          auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, emailSubject: e.target.value } : t)
+                                        });
+                                      }}
+                                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:border-zinc-500 outline-none transition-all"
+                                    />
+                                    <textarea 
+                                      placeholder="Cuerpo del correo. Variables: {count}, {date}, {template_name}"
+                                      value={template.emailBody || ''} 
+                                      onChange={e => {
+                                        if (!config) return;
+                                        setConfig({
+                                          ...config,
+                                          auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, emailBody: e.target.value } : t)
+                                        });
+                                      }}
+                                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:border-zinc-500 outline-none transition-all resize-none h-20"
+                                    />
+                                  </>
+                                )}
                               </div>
 
                               <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-4">
@@ -2086,6 +2121,20 @@ export default function App() {
                                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:border-zinc-500 outline-none transition-all"
                                   disabled={!template.waEnabled}
                                 />
+                                {template.waEnabled && (
+                                  <textarea 
+                                    placeholder="Mensaje de WhatsApp. Variables: {count}, {date}, {template_name}"
+                                    value={template.waMessage || ''} 
+                                    onChange={e => {
+                                      if (!config) return;
+                                      setConfig({
+                                        ...config,
+                                        auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, waMessage: e.target.value } : t)
+                                      });
+                                    }}
+                                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs focus:border-zinc-500 outline-none transition-all resize-none h-20"
+                                  />
+                                )}
                               </div>
                             </div>
                           </div>
