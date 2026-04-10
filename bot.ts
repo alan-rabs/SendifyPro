@@ -216,34 +216,84 @@ export async function startBot() {
               
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
               
-              // Fetch a larger batch to find messages from that date
-              let batch = [];
-              try {
-                batch = await targetChat.fetchMessages({ limit: 5000 });
-              } catch (fetchErr: any) {
-                log('WARN', `Error al buscar 5000 mensajes en "${chatConf.targetContact}": ${fetchErr.message}. Intentando con 1000...`);
+              let currentLimit = 100;
+              let reachedTargetDate = false;
+              let consecutiveErrors = 0;
+              let lastMessageCount = 0;
+
+              while (!reachedTargetDate && currentLimit <= 5000) {
                 try {
-                  batch = await targetChat.fetchMessages({ limit: 1000 });
-                } catch (fetchErr2: any) {
-                  log('WARN', `Error al buscar 1000 mensajes en "${chatConf.targetContact}": ${fetchErr2.message}. Intentando con 100...`);
-                  try {
-                    batch = await targetChat.fetchMessages({ limit: 100 });
-                  } catch (fetchErr3: any) {
-                    log('ERROR', `Fallo definitivo al buscar historial en "${chatConf.targetContact}": ${fetchErr3.message}. Se omitirá este chat en la recuperación inicial.`);
-                    batch = []; // Fallback to empty array to avoid crashing the loop
+                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
+                  messages = batch;
+                  
+                  if (batch.length === 0 || batch.length === lastMessageCount) {
+                    // No more messages available in the chat history
+                    break;
+                  }
+                  lastMessageCount = batch.length;
+                  
+                  const oldestMsg = batch[0];
+                  if (oldestMsg.timestamp <= targetTimestamp) {
+                    reachedTargetDate = true;
+                  } else {
+                    currentLimit += 200; // Increase limit to fetch older messages
+                    // Add a small delay to avoid overwhelming the WhatsApp Web client
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                  }
+                  consecutiveErrors = 0;
+                } catch (fetchErr: any) {
+                  if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors > 5) {
+                      log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación para este chat.`);
+                      break;
+                    }
+                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Esperando 3 segundos antes de reintentar...`);
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                  } else {
+                    log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
+                    break;
                   }
                 }
               }
-              messages = batch.filter((m: any) => m.timestamp >= targetTimestamp);
+              
+              messages = messages.filter((m: any) => m.timestamp >= targetTimestamp);
               log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
             } else {
-              const fetchLimit = config.initialFetchLimit || 50;
-              log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${fetchLimit} mensajes...`);
-              try {
-                messages = await targetChat.fetchMessages({ limit: fetchLimit });
-              } catch (fetchErr: any) {
-                log('WARN', `Error al buscar ${fetchLimit} mensajes en "${chatConf.targetContact}": ${fetchErr.message}. Intentando con 50...`);
-                messages = await targetChat.fetchMessages({ limit: 50 });
+              const targetLimit = config.initialFetchLimit || 50;
+              log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${targetLimit} mensajes...`);
+              
+              let currentLimit = Math.min(50, targetLimit);
+              let consecutiveErrors = 0;
+              let lastMessageCount = 0;
+
+              while (currentLimit <= targetLimit) {
+                try {
+                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
+                  messages = batch;
+                  
+                  if (batch.length === 0 || batch.length === lastMessageCount || batch.length >= targetLimit) {
+                    break;
+                  }
+                  lastMessageCount = batch.length;
+                  
+                  currentLimit = Math.min(currentLimit + 100, targetLimit);
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                  consecutiveErrors = 0;
+                } catch (fetchErr: any) {
+                  if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors > 5) {
+                      log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación.`);
+                      break;
+                    }
+                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Esperando 3 segundos...`);
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                  } else {
+                    log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
+                    break;
+                  }
+                }
               }
             }
             
@@ -687,10 +737,46 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
       log('INFO', `Revisando historial del chat "${chat.name}" para validación...`);
       
-      // Fetch a large number of messages to ensure we cover the date
-      // If endDate is provided, we might need more messages
-      const fetchLimit = endDate ? 5000 : 3000;
-      const messages = await chat.fetchMessages({ limit: fetchLimit });
+      let messages = [];
+      let currentLimit = 100;
+      let reachedTargetDate = false;
+      let consecutiveErrors = 0;
+      let lastMessageCount = 0;
+      const maxLimit = endDate ? 10000 : 5000;
+
+      while (!reachedTargetDate && currentLimit <= maxLimit) {
+        try {
+          const batch = await chat.fetchMessages({ limit: currentLimit });
+          messages = batch;
+          
+          if (batch.length === 0 || batch.length === lastMessageCount) {
+            break;
+          }
+          lastMessageCount = batch.length;
+          
+          const oldestMsg = batch[0];
+          if (oldestMsg.timestamp <= startOfDay) {
+            reachedTargetDate = true;
+          } else {
+            currentLimit += 200;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          consecutiveErrors = 0;
+        } catch (fetchErr: any) {
+          if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
+            consecutiveErrors++;
+            if (consecutiveErrors > 5) {
+              log('ERROR', `Demasiados errores al cargar el chat "${chat.name}". Abortando barrido para este chat.`);
+              break;
+            }
+            log('WARN', `El chat "${chat.name}" aún está cargando. Esperando 3 segundos antes de reintentar...`);
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          } else {
+            log('ERROR', `Error inesperado al buscar mensajes en "${chat.name}": ${fetchErr.message}`);
+            break;
+          }
+        }
+      }
       
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
