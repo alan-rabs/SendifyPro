@@ -206,38 +206,58 @@ export async function startBot() {
         const targetChat = chats.find((c: any) => c.name === chatConf.targetContact || c.name === chatConf.targetContact.trim());
 
         if (targetChat) {
-          let messages = [];
-          if (config.initialFetchMode === 'date') {
-            const targetDate = new Date(config.initialFetchDate || new Date());
-            targetDate.setHours(0, 0, 0, 0);
-            const targetTimestamp = Math.floor(targetDate.getTime() / 1000);
-            
-            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
-            
-            // Fetch a larger batch to find messages from that date
-            const batch = await targetChat.fetchMessages({ limit: 5000 });
-            messages = batch.filter((m: any) => m.timestamp >= targetTimestamp);
-            log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
-          } else {
-            const fetchLimit = config.initialFetchLimit || 50;
-            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${fetchLimit} mensajes...`);
-            messages = await targetChat.fetchMessages({ limit: fetchLimit });
-          }
-          
-          let processedCount = 0;
-          for (let i = 0; i < messages.length; i++) {
-            const msg = messages[i];
-            const processed = await processMessage(msg);
-            if (processed) processedCount++;
-            
-            if (i > 0 && i % 500 === 0) {
-              log('INFO', `Progreso de recuperación en "${chatConf.targetContact}": ${i}/${messages.length} mensajes revisados...`);
+          try {
+            let messages = [];
+            if (config.initialFetchMode === 'date') {
+              const targetDate = new Date(config.initialFetchDate || new Date());
+              targetDate.setHours(0, 0, 0, 0);
+              const targetTimestamp = Math.floor(targetDate.getTime() / 1000);
+              
+              log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
+              
+              // Fetch a larger batch to find messages from that date
+              let batch = [];
+              try {
+                batch = await targetChat.fetchMessages({ limit: 5000 });
+              } catch (fetchErr: any) {
+                log('WARN', `Error al buscar 5000 mensajes en "${chatConf.targetContact}": ${fetchErr.message}. Intentando con 1000...`);
+                try {
+                  batch = await targetChat.fetchMessages({ limit: 1000 });
+                } catch (fetchErr2: any) {
+                  log('WARN', `Error al buscar 1000 mensajes en "${chatConf.targetContact}": ${fetchErr2.message}. Intentando con 100...`);
+                  batch = await targetChat.fetchMessages({ limit: 100 });
+                }
+              }
+              messages = batch.filter((m: any) => m.timestamp >= targetTimestamp);
+              log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
+            } else {
+              const fetchLimit = config.initialFetchLimit || 50;
+              log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${fetchLimit} mensajes...`);
+              try {
+                messages = await targetChat.fetchMessages({ limit: fetchLimit });
+              } catch (fetchErr: any) {
+                log('WARN', `Error al buscar ${fetchLimit} mensajes en "${chatConf.targetContact}": ${fetchErr.message}. Intentando con 50...`);
+                messages = await targetChat.fetchMessages({ limit: 50 });
+              }
             }
-          }
-          
-          if (processedCount > 0) {
-            log('INFO', `✅ Se recuperaron y procesaron ${processedCount} mensajes/archivos pendientes en "${chatConf.targetContact}".`);
-            totalProcessed += processedCount;
+            
+            let processedCount = 0;
+            for (let i = 0; i < messages.length; i++) {
+              const msg = messages[i];
+              const processed = await processMessage(msg);
+              if (processed) processedCount++;
+              
+              if (i > 0 && i % 500 === 0) {
+                log('INFO', `Progreso de recuperación en "${chatConf.targetContact}": ${i}/${messages.length} mensajes revisados...`);
+              }
+            }
+            
+            if (processedCount > 0) {
+              log('INFO', `✅ Se recuperaron y procesaron ${processedCount} mensajes/archivos pendientes en "${chatConf.targetContact}".`);
+              totalProcessed += processedCount;
+            }
+          } catch (chatErr: any) {
+            log('ERROR', `Error al procesar el historial del chat "${chatConf.targetContact}": ${chatErr.message}`);
           }
         } else {
           log('WARN', `No se encontró el chat "${chatConf.targetContact}" en el historial reciente.`);
