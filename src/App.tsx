@@ -112,7 +112,9 @@ interface AuditTemplate {
   emailTargets: string;
   waEnabled: boolean;
   waTargets: string;
-  schedule: string;
+  schedule: string; // Time of day e.g. '23:59'
+  frequency?: 'daily' | 'weekly' | 'monthly';
+  timeRange?: 'today' | 'yesterday' | 'this_week' | 'last_week' | 'this_month' | 'last_month';
 }
 
 interface Config {
@@ -1864,7 +1866,7 @@ export default function App() {
                     )}
                     
                     <button 
-                      onClick={() => window.open('/api/audit/export', '_blank')}
+                      onClick={() => window.open(`/api/audit/export?startDate=${statsStartDate}&endDate=${statsEndDate}`, '_blank')}
                       className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-zinc-800 text-white rounded-lg font-bold text-sm hover:bg-zinc-700 transition-all"
                     >
                       <Download size={18} /> Descargar Reporte Completo (CSV)
@@ -1955,6 +1957,47 @@ export default function App() {
                                       {col}
                                     </button>
                                   ))}
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1.5">
+                                  <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Frecuencia</label>
+                                  <select
+                                    value={template.frequency || 'daily'}
+                                    onChange={e => {
+                                      if (!config) return;
+                                      setConfig({
+                                        ...config,
+                                        auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, frequency: e.target.value as any } : t)
+                                      });
+                                    }}
+                                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                                  >
+                                    <option value="daily">Diario</option>
+                                    <option value="weekly">Semanal</option>
+                                    <option value="monthly">Mensual</option>
+                                  </select>
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Rango de Tiempo</label>
+                                  <select
+                                    value={template.timeRange || 'yesterday'}
+                                    onChange={e => {
+                                      if (!config) return;
+                                      setConfig({
+                                        ...config,
+                                        auditTemplates: config.auditTemplates?.map(t => t.id === template.id ? { ...t, timeRange: e.target.value as any } : t)
+                                      });
+                                    }}
+                                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all"
+                                  >
+                                    <option value="today">Hoy</option>
+                                    <option value="yesterday">Día anterior</option>
+                                    <option value="this_week">Esta semana</option>
+                                    <option value="last_week">Semana anterior</option>
+                                    <option value="this_month">Este mes</option>
+                                    <option value="last_month">Mes anterior</option>
+                                  </select>
                                 </div>
                               </div>
                               <div className="space-y-1.5">

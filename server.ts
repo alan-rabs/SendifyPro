@@ -166,15 +166,36 @@ async function startServer() {
       const { startDate, endDate } = req.query;
       const logs = db.getAuditLogs(10000); // Obtener todos los logs para filtrar
       
+      const start = new Date(startDate as string);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(endDate as string);
+      end.setHours(23, 59, 59, 999);
+
       const filteredLogs = logs.filter((log: any) => {
-        const logDate = new Date(log.timestamp);
-        return logDate >= new Date(startDate as string) && logDate <= new Date(endDate as string);
+        let logDate;
+        try {
+          const parts = log.timestamp.split(/[, ]+/);
+          const dateParts = parts[0].split('/');
+          if (dateParts.length === 3) {
+            // Assuming DD/MM/YYYY
+            logDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '00:00:00'}`);
+          } else {
+            logDate = new Date(log.timestamp);
+          }
+        } catch (e) {
+          logDate = new Date(log.timestamp);
+        }
+        
+        // If parsing fails, logDate might be Invalid Date
+        if (isNaN(logDate.getTime())) return false;
+
+        return logDate >= start && logDate <= end;
       });
 
       const stats = {
         total: filteredLogs.length,
-        email: filteredLogs.filter((l: any) => l.error === 'email').length,
-        whatsapp: filteredLogs.filter((l: any) => l.action_type.includes('WhatsApp')).length,
+        email: filteredLogs.filter((l: any) => l.error && l.error.includes('Email')).length,
+        whatsapp: filteredLogs.filter((l: any) => l.error && l.error.includes('WA')).length,
       };
       
       res.json(stats);
@@ -185,7 +206,34 @@ async function startServer() {
 
   app.get("/api/audit/export", (req, res) => {
     try {
-      const logs = db.getAuditLogs(5000);
+      const { startDate, endDate } = req.query;
+      let logs = db.getAuditLogs(10000);
+      
+      if (startDate && endDate) {
+        const start = new Date(startDate as string);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(endDate as string);
+        end.setHours(23, 59, 59, 999);
+
+        logs = logs.filter((log: any) => {
+          let logDate;
+          try {
+            const parts = log.timestamp.split(/[, ]+/);
+            const dateParts = parts[0].split('/');
+            if (dateParts.length === 3) {
+              logDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '00:00:00'}`);
+            } else {
+              logDate = new Date(log.timestamp);
+            }
+          } catch (e) {
+            logDate = new Date(log.timestamp);
+          }
+          
+          if (isNaN(logDate.getTime())) return false;
+          return logDate >= start && logDate <= end;
+        });
+      }
+
       // Add UTF-8 BOM to fix encoding issues in Excel
       let csv = "\uFEFFID,Timestamp,Hora,Conversacion,Regla,NSS,CURP,Mensaje,Status,Ejecución,Fecha/Hora Procesamiento\n";
       

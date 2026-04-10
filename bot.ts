@@ -1099,12 +1099,82 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
 }
 
 // Función para generar un CSV personalizado basado en una plantilla desde SQLite
-function generateCustomCsvFromDb(columns: string[]): string | null {
+function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today'): string | null {
   const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
   if (logs.length === 0) return null;
 
+  const now = new Date();
+  let start = new Date();
+  let end = new Date();
+
+  switch (timeRange) {
+    case 'today':
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+      break;
+    case 'yesterday':
+      start.setDate(start.getDate() - 1);
+      start.setHours(0, 0, 0, 0);
+      end.setDate(end.getDate() - 1);
+      end.setHours(23, 59, 59, 999);
+      break;
+    case 'this_week':
+      const day = start.getDay();
+      const diff = start.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+      start.setDate(diff);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+      break;
+    case 'last_week':
+      const lastWeekDay = start.getDay();
+      const lastWeekDiff = start.getDate() - lastWeekDay + (lastWeekDay === 0 ? -6 : 1) - 7;
+      start.setDate(lastWeekDiff);
+      start.setHours(0, 0, 0, 0);
+      end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+      break;
+    case 'this_month':
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+      break;
+    case 'last_month':
+      start.setMonth(start.getMonth() - 1);
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      end = new Date(start);
+      end.setMonth(end.getMonth() + 1);
+      end.setDate(0);
+      end.setHours(23, 59, 59, 999);
+      break;
+    default:
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+  }
+
+  const filteredLogs = logs.filter((log: any) => {
+    let logDate;
+    try {
+      const parts = log.timestamp.split(/[, ]+/);
+      const dateParts = parts[0].split('/');
+      if (dateParts.length === 3) {
+        logDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '00:00:00'}`);
+      } else {
+        logDate = new Date(log.timestamp);
+      }
+    } catch (e) {
+      logDate = new Date(log.timestamp);
+    }
+    
+    if (isNaN(logDate.getTime())) return false;
+    return logDate >= start && logDate <= end;
+  });
+
+  if (filteredLogs.length === 0) return null;
+
   const header = columns.join(',');
-  const rows = logs.map((log: any) => {
+  const rows = filteredLogs.map((log: any) => {
     return columns.map(col => {
       let val = '';
       const colLower = col.toLowerCase();
@@ -1187,13 +1257,29 @@ setInterval(async () => {
   if (config.auditTemplates) {
     config.auditTemplates.forEach(async (template: any) => {
       if (template.schedule === timeStr && (global as any).lastAuditRun !== `${template.id}_${dateStr}_${timeStr}`) {
+        
+        const freq = template.frequency || 'daily';
+        let shouldRun = false;
+        const dayOfWeek = now.getDay();
+        const dayOfMonth = now.getDate();
+
+        if (freq === 'daily') {
+          shouldRun = true;
+        } else if (freq === 'weekly' && dayOfWeek === 1) { // Lunes
+          shouldRun = true;
+        } else if (freq === 'monthly' && dayOfMonth === 1) { // Día 1 del mes
+          shouldRun = true;
+        }
+
+        if (!shouldRun) return;
+
         (global as any).lastAuditRun = `${template.id}_${dateStr}_${timeStr}`;
         
         log('INFO', `Iniciando tarea programada para plantilla: "${template.name}"`);
         
-        const customCsv = generateCustomCsvFromDb(template.columns);
+        const customCsv = generateCustomCsvFromDb(template.columns, template.timeRange || 'today');
         if (!customCsv) {
-          log('INFO', `No hay datos para la plantilla "${template.name}" hoy.`);
+          log('INFO', `No hay datos para la plantilla "${template.name}" en el rango de tiempo especificado.`);
           return;
         }
 
