@@ -1278,7 +1278,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
 }
 
 // Función para generar un CSV personalizado basado en una plantilla desde SQLite
-function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today', rules?: string[], splitByRule?: boolean): { content: string | Buffer, count: number, isXlsx: boolean } | null {
+export function generateCustomCsvFromDb(columns: string[], timeRange: string | {start: string, end: string} = 'today', rules?: string[], splitByRule?: boolean): { content: string | Buffer, count: number, isXlsx: boolean } | null {
   const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
   if (logs.length === 0) return null;
 
@@ -1286,50 +1286,58 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today',
   let start = new Date();
   let end = new Date();
 
-  switch (timeRange) {
-    case 'today':
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-      break;
-    case 'yesterday':
-      start.setDate(start.getDate() - 1);
-      start.setHours(0, 0, 0, 0);
-      end.setDate(end.getDate() - 1);
-      end.setHours(23, 59, 59, 999);
-      break;
-    case 'this_week':
-      const day = start.getDay();
-      const diff = start.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
-      start.setDate(diff);
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-      break;
-    case 'last_week':
-      const lastWeekDay = start.getDay();
-      const lastWeekDiff = start.getDate() - lastWeekDay + (lastWeekDay === 0 ? -6 : 1) - 7;
-      start.setDate(lastWeekDiff);
-      start.setHours(0, 0, 0, 0);
-      end = new Date(start);
-      end.setDate(end.getDate() + 6);
-      end.setHours(23, 59, 59, 999);
-      break;
-    case 'this_month':
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-      break;
-    case 'last_month':
-      start.setMonth(start.getMonth() - 1);
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      end = new Date(start);
-      end.setMonth(end.getMonth() + 1);
-      end.setDate(0);
-      end.setHours(23, 59, 59, 999);
-      break;
-    default:
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
+  if (typeof timeRange === 'object' && timeRange !== null) {
+    // Parse custom dates (assuming YYYY-MM-DD)
+    const [startYear, startMonth, startDay] = timeRange.start.split('-').map(Number);
+    const [endYear, endMonth, endDay] = timeRange.end.split('-').map(Number);
+    start = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
+    end = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999);
+  } else {
+    switch (timeRange) {
+      case 'today':
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'yesterday':
+        start.setDate(start.getDate() - 1);
+        start.setHours(0, 0, 0, 0);
+        end.setDate(end.getDate() - 1);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'this_week':
+        const day = start.getDay();
+        const diff = start.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+        start.setDate(diff);
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'last_week':
+        const lastWeekDay = start.getDay();
+        const lastWeekDiff = start.getDate() - lastWeekDay + (lastWeekDay === 0 ? -6 : 1) - 7;
+        start.setDate(lastWeekDiff);
+        start.setHours(0, 0, 0, 0);
+        end = new Date(start);
+        end.setDate(end.getDate() + 6);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'this_month':
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case 'last_month':
+        start.setMonth(start.getMonth() - 1);
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        end = new Date(start);
+        end.setMonth(end.getMonth() + 1);
+        end.setDate(0);
+        end.setHours(23, 59, 59, 999);
+        break;
+      default:
+        start.setHours(0, 0, 0, 0);
+        end.setHours(23, 59, 59, 999);
+    }
   }
 
   const filteredLogs = logs.filter((log: any) => {

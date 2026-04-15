@@ -237,6 +237,11 @@ export default function App() {
   const [isResettingMetrics, setIsResettingMetrics] = useState(false);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingTab, setPendingTab] = useState<string | null>(null);
+  const [showTemplateDownloadModal, setShowTemplateDownloadModal] = useState(false);
+  const [selectedTemplateForDownload, setSelectedTemplateForDownload] = useState<AuditTemplate | null>(null);
+  const [templateDownloadStartDate, setTemplateDownloadStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [templateDownloadEndDate, setTemplateDownloadEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -387,6 +392,46 @@ export default function App() {
     setPendingTab(null);
     setShowUnsavedModal(false);
   };
+
+  const handleDownloadTemplate = async () => {
+    if (!selectedTemplateForDownload) return;
+    setIsDownloadingTemplate(true);
+    try {
+      const res = await fetch('/api/audit/export-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template: selectedTemplateForDownload,
+          startDate: templateDownloadStartDate,
+          endDate: templateDownloadEndDate
+        })
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || "Error al generar reporte");
+      }
+      
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const filename = res.headers.get('Content-Disposition')?.split('filename=')[1] || `reporte_${selectedTemplateForDownload.name}.csv`;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      toast.success("Reporte descargado correctamente");
+      setShowTemplateDownloadModal(false);
+    } catch (e: any) {
+      toast.error(e.message || "Error al descargar el reporte");
+    } finally {
+      setIsDownloadingTemplate(false);
+    }
+  };
+
   const handleClearAudit = async () => {
     setIsClearingAudit(true);
     try {
@@ -1980,15 +2025,27 @@ export default function App() {
                                 className="bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-zinc-500 outline-none text-lg font-bold text-zinc-100 transition-all"
                               />
                             </div>
-                            <button 
-                              onClick={() => {
-                                if (!config) return;
-                                setConfig({ ...config, auditTemplates: config.auditTemplates?.filter(t => t.id !== template.id) });
-                              }}
-                              className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"
-                            >
-                              <Trash2 size={18} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={() => {
+                                  setSelectedTemplateForDownload(template);
+                                  setShowTemplateDownloadModal(true);
+                                }}
+                                className="p-2 text-zinc-600 hover:text-emerald-500 transition-colors"
+                                title="Descargar reporte con esta plantilla"
+                              >
+                                <Download size={18} />
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  if (!config) return;
+                                  setConfig({ ...config, auditTemplates: config.auditTemplates?.filter(t => t.id !== template.id) });
+                                }}
+                                className="p-2 text-zinc-600 hover:text-rose-500 transition-colors"
+                              >
+                                <Trash2 size={18} />
+                              </button>
+                            </div>
                           </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -2727,6 +2784,76 @@ export default function App() {
           background: #3f3f46;
         }
       `}</style>
+
+      {/* Template Download Modal */}
+      <AnimatePresence>
+        {showTemplateDownloadModal && selectedTemplateForDownload && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl max-w-md w-full overflow-hidden"
+            >
+              <div className="p-6">
+                <div className="flex items-center gap-4 mb-4 text-emerald-500">
+                  <div className="p-3 bg-emerald-500/10 rounded-full">
+                    <Download size={24} />
+                  </div>
+                  <h3 className="text-xl font-semibold text-white">Descargar Plantilla</h3>
+                </div>
+                <p className="text-zinc-400 mb-6">
+                  Selecciona el rango de fechas para generar el reporte con la plantilla "{selectedTemplateForDownload.name}".
+                </p>
+                
+                <div className="grid grid-cols-2 gap-4 mb-6">
+                  <div className="space-y-2">
+                    <label className="text-xs text-zinc-500 uppercase font-bold tracking-widest">Fecha Inicio</label>
+                    <input 
+                      type="date" 
+                      value={templateDownloadStartDate}
+                      onChange={(e) => setTemplateDownloadStartDate(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:border-emerald-500 outline-none transition-colors"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs text-zinc-500 uppercase font-bold tracking-widest">Fecha Fin</label>
+                    <input 
+                      type="date" 
+                      value={templateDownloadEndDate}
+                      onChange={(e) => setTemplateDownloadEndDate(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:border-emerald-500 outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <button 
+                    onClick={handleDownloadTemplate}
+                    disabled={isDownloadingTemplate}
+                    className="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isDownloadingTemplate ? <RefreshCw className="animate-spin" size={18} /> : <Download size={18} />}
+                    Descargar Reporte
+                  </button>
+                  <button 
+                    onClick={() => setShowTemplateDownloadModal(false)}
+                    disabled={isDownloadingTemplate}
+                    className="w-full px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Unsaved Changes Modal */}
       <AnimatePresence>

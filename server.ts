@@ -6,7 +6,7 @@ import { exec, execSync } from "child_process";
 import axios from "axios";
 import AdmZip from "adm-zip";
 import os from "os";
-import { startBot, stopBot, botStatus, currentQrCode, logs, getStats, getConfig, saveConfig } from "./bot.js";
+import { startBot, stopBot, botStatus, currentQrCode, logs, getStats, getConfig, saveConfig, generateCustomCsvFromDb } from "./bot.js";
 import * as db from "./db.js";
 
 // Global error handlers to prevent server crashes
@@ -267,6 +267,39 @@ async function startServer() {
       res.send(csv);
     } catch (e) {
       res.status(500).send("Error al exportar auditoría");
+    }
+  });
+
+  app.post("/api/audit/export-template", (req, res) => {
+    try {
+      const { template, startDate, endDate } = req.body;
+      if (!template || !template.columns) {
+        return res.status(400).json({ error: "Plantilla inválida" });
+      }
+
+      const timeRange = (startDate && endDate) ? { start: startDate, end: endDate } : (template.timeRange || 'today');
+      
+      const csvResult = generateCustomCsvFromDb(
+        template.columns,
+        timeRange,
+        template.rules,
+        template.splitByRule
+      );
+
+      if (!csvResult) {
+        return res.status(404).json({ error: "No hay datos para el rango seleccionado" });
+      }
+
+      const fileExtension = csvResult.isXlsx ? 'xlsx' : 'csv';
+      const mimeType = csvResult.isXlsx ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv; charset=utf-8';
+      const filename = `reporte_${template.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${startDate || 'export'}.${fileExtension}`;
+
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+      res.send(csvResult.content);
+    } catch (e) {
+      console.error("Error exporting template:", e);
+      res.status(500).json({ error: "Error al exportar plantilla" });
     }
   });
 
