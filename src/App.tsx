@@ -33,7 +33,8 @@ import {
   BookOpen,
   ShieldCheck,
   Zap,
-  Layers
+  Layers,
+  Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
@@ -218,6 +219,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [config, setConfig] = useState<Config | null>(null);
+  const [originalConfig, setOriginalConfig] = useState<Config | null>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'settings' | 'audit' | 'update' | 'help'>('dashboard');
@@ -233,6 +235,8 @@ export default function App() {
   const [isClearingAudit, setIsClearingAudit] = useState(false);
   const [showResetMetricsModal, setShowResetMetricsModal] = useState(false);
   const [isResettingMetrics, setIsResettingMetrics] = useState(false);
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const [pendingTab, setPendingTab] = useState<string | null>(null);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -325,6 +329,7 @@ export default function App() {
       const data = await res.json();
       if (!data) throw new Error("Configuración vacía");
       setConfig(data);
+      setOriginalConfig(data);
     } catch (e: any) {
       console.error("Error fetching config", e);
       setError(prev => prev ? `${prev} | ${e.message}` : e.message);
@@ -347,6 +352,41 @@ export default function App() {
     }
   }, []);
 
+  const handleTabChange = (newTab: any) => {
+    if (activeTab === newTab) return;
+    
+    // Check for unsaved changes
+    if (config && originalConfig && JSON.stringify(config) !== JSON.stringify(originalConfig)) {
+      setPendingTab(newTab);
+      setShowUnsavedModal(true);
+      return;
+    }
+    
+    setActiveTab(newTab);
+  };
+
+  const confirmTabChangeDiscard = () => {
+    if (pendingTab) {
+      setConfig(JSON.parse(JSON.stringify(originalConfig)));
+      setActiveTab(pendingTab as any);
+      setPendingTab(null);
+    }
+    setShowUnsavedModal(false);
+  };
+
+  const confirmTabChangeSave = async () => {
+    const success = await handleSaveConfig();
+    if (success && pendingTab) {
+      setActiveTab(pendingTab as any);
+      setPendingTab(null);
+      setShowUnsavedModal(false);
+    }
+  };
+
+  const cancelTabChange = () => {
+    setPendingTab(null);
+    setShowUnsavedModal(false);
+  };
   const handleClearAudit = async () => {
     setIsClearingAudit(true);
     try {
@@ -462,7 +502,7 @@ export default function App() {
   };
 
   const handleSaveConfig = async () => {
-    if (!config) return;
+    if (!config) return false;
     setIsSaving(true);
     try {
       const res = await fetch('/api/settings', {
@@ -472,11 +512,15 @@ export default function App() {
       });
       if (res.ok) {
         toast.success("Configuración guardada correctamente.");
+        setOriginalConfig(config);
+        return true;
       } else {
         toast.error("Error al guardar configuración.");
+        return false;
       }
     } catch (e) {
       toast.error("Error de conexión al guardar.");
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -675,7 +719,7 @@ export default function App() {
           ].map((item) => (
             <button 
               key={item.id}
-              onClick={() => setActiveTab(item.id as any)}
+              onClick={() => handleTabChange(item.id as any)}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === item.id ? 'bg-zinc-100 text-black' : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200'} ${isSidebarCollapsed ? 'justify-center px-0' : ''}`}
               title={isSidebarCollapsed ? item.label : undefined}
             >
@@ -1012,7 +1056,7 @@ export default function App() {
                       )}
 
                       <button 
-                        onClick={() => setActiveTab('audit')}
+                        onClick={() => handleTabChange('audit')}
                         className="text-xs text-rose-400 hover:text-rose-300 underline"
                       >
                         Ver registro de auditoría
@@ -1851,6 +1895,9 @@ export default function App() {
                         <input type="date" value={statsEndDate} onChange={(e) => setStatsEndDate(e.target.value)} className="w-full bg-zinc-950 border border-zinc-700 rounded-lg p-2 text-sm text-white" />
                       </div>
                       <button onClick={fetchStats} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold text-sm hover:bg-emerald-500 transition-all">Consultar</button>
+                      <a href={`/api/audit/export?startDate=${statsStartDate}&endDate=${statsEndDate}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-zinc-700 text-white rounded-lg font-bold text-sm hover:bg-zinc-600 transition-all flex items-center gap-2">
+                        <Download className="w-4 h-4" /> Exportar CSV
+                      </a>
                     </div>
 
                     {auditStats && (
@@ -2680,6 +2727,62 @@ export default function App() {
           background: #3f3f46;
         }
       `}</style>
+
+      {/* Unsaved Changes Modal */}
+      <AnimatePresence>
+        {showUnsavedModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl max-w-md w-full overflow-hidden"
+            >
+              <div className="p-6">
+                <div className="flex items-center gap-4 mb-4 text-amber-500">
+                  <div className="p-3 bg-amber-500/10 rounded-full">
+                    <AlertTriangle size={24} />
+                  </div>
+                  <h3 className="text-xl font-semibold text-white">Cambios sin guardar</h3>
+                </div>
+                <p className="text-zinc-400 mb-6">
+                  Tienes cambios sin guardar en la configuración actual. ¿Qué deseas hacer antes de cambiar de pestaña?
+                </p>
+                <div className="flex flex-col gap-3">
+                  <button 
+                    onClick={confirmTabChangeSave}
+                    disabled={isSaving}
+                    className="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isSaving ? <RefreshCw className="animate-spin" size={18} /> : <Save size={18} />}
+                    Guardar cambios y continuar
+                  </button>
+                  <button 
+                    onClick={confirmTabChangeDiscard}
+                    disabled={isSaving}
+                    className="w-full px-4 py-3 bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    <Trash2 size={18} />
+                    Descartar cambios
+                  </button>
+                  <button 
+                    onClick={cancelTabChange}
+                    disabled={isSaving}
+                    className="w-full px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Clear Audit Modal */}
       <AnimatePresence>

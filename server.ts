@@ -166,31 +166,28 @@ async function startServer() {
       const { startDate, endDate } = req.query;
       const logs = db.getAuditLogs(10000); // Obtener todos los logs para filtrar
       
-      const start = new Date(startDate as string);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(endDate as string);
-      end.setHours(23, 59, 59, 999);
-
-      const filteredLogs = logs.filter((log: any) => {
-        let logDate;
-        try {
-          const parts = log.timestamp.split(/[, ]+/);
-          const dateParts = parts[0].split('/');
-          if (dateParts.length === 3) {
-            // Assuming DD/MM/YYYY
-            logDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '00:00:00'}`);
-          } else {
-            logDate = new Date(log.timestamp);
+      let filteredLogs = logs;
+      if (startDate && endDate) {
+        filteredLogs = logs.filter((log: any) => {
+          let logDateStr = '';
+          try {
+            const parts = log.timestamp.split(/[, ]+/);
+            const dateParts = parts[0].split('/');
+            if (dateParts.length === 3) {
+              const year = dateParts[2];
+              const month = dateParts[1].padStart(2, '0');
+              const day = dateParts[0].padStart(2, '0');
+              logDateStr = `${year}-${month}-${day}`;
+            } else {
+              logDateStr = log.timestamp.split('T')[0];
+            }
+          } catch (e) {
+            logDateStr = log.timestamp;
           }
-        } catch (e) {
-          logDate = new Date(log.timestamp);
-        }
-        
-        // If parsing fails, logDate might be Invalid Date
-        if (isNaN(logDate.getTime())) return false;
-
-        return logDate >= start && logDate <= end;
-      });
+          
+          return logDateStr >= startDate && logDateStr <= endDate;
+        });
+      }
 
       const stats = {
         total: filteredLogs.length,
@@ -210,27 +207,29 @@ async function startServer() {
       let logs = db.getAuditLogs(10000);
       
       if (startDate && endDate) {
-        const start = new Date(startDate as string);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(endDate as string);
-        end.setHours(23, 59, 59, 999);
-
+        // Parse dates assuming they are in Mexico City timezone
+        const startStr = `${startDate}T00:00:00`;
+        const endStr = `${endDate}T23:59:59`;
+        
+        // We will do string comparison on the date part of the timestamp to avoid timezone shifts
         logs = logs.filter((log: any) => {
-          let logDate;
+          let logDateStr = '';
           try {
             const parts = log.timestamp.split(/[, ]+/);
             const dateParts = parts[0].split('/');
             if (dateParts.length === 3) {
-              logDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${parts[1] || '00:00:00'}`);
+              const year = dateParts[2];
+              const month = dateParts[1].padStart(2, '0');
+              const day = dateParts[0].padStart(2, '0');
+              logDateStr = `${year}-${month}-${day}`;
             } else {
-              logDate = new Date(log.timestamp);
+              logDateStr = log.timestamp.split('T')[0];
             }
           } catch (e) {
-            logDate = new Date(log.timestamp);
+            logDateStr = log.timestamp;
           }
           
-          if (isNaN(logDate.getTime())) return false;
-          return logDate >= start && logDate <= end;
+          return logDateStr >= startDate && logDateStr <= endDate;
         });
       }
 

@@ -416,7 +416,7 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
       return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
     }, chat.id._serialized, searchOptions);
 
-    const { Message } = pkg;
+    const Message = (pkg as any).Message;
     return messages.map((m: any) => new Message(client, m));
   } catch (err: any) {
     console.error(`[safeFetchMessages] Evaluate failed for chat ${chat.name}:`, err.message);
@@ -904,7 +904,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
           if (shouldBeProcessed && !isMarkedProcessed) {
             // Found a missing message!
-            log('WARN', `Barrido: Se encontró un mensaje no procesado en ${chat.name} del ${new Date(msg.timestamp * 1000).toLocaleString()}`);
+            log('WARN', `Barrido: Se encontró un mensaje no procesado en ${chat.name} del ${new Date(msg.timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}`);
             totalMissingFound++;
             
             // Process it now, marking it as a sweep execution
@@ -1259,7 +1259,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
         log('INFO', `📱 Reenviando mensaje a: "${name}"...`);
         log('DEBUG', `Contenido del mensaje a enviar a "${name}": "${message}"`);
         if (media) {
-          await chat.sendMessage(media, { caption: message });
+          await chat.sendMessage(media, { caption: message, sendMediaAsDocument: true });
         } else {
           await chat.sendMessage(message);
         }
@@ -1378,15 +1378,15 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today',
       
       const timestampParts = (log.timestamp || '').split(', ');
       
-      if (colLower === 'date' || colLower === 'timestamp') val = timestampParts[0] || '';
+      if (colLower === 'date' || colLower === 'timestamp' || colLower === 'fecha') val = timestampParts[0] || '';
       else if (colLower === 'time' || colLower === 'hora') val = timestampParts[1] || '';
-      else if (colLower === 'contact' || colLower === 'conversacion') val = log.phone_number || '';
-      else if (colLower === 'status' && !columns.includes('Regla')) val = log.action_type || ''; // Fallback for old templates
-      else if (colLower === 'regla' || colLower === 'accion') val = log.action_type || '';
+      else if (colLower === 'contact' || colLower === 'conversacion' || colLower === 'conversación') val = log.phone_number || '';
+      else if (colLower === 'status' && !columns.some(c => c.toLowerCase() === 'regla')) val = log.action_type || ''; // Fallback for old templates
+      else if (colLower === 'regla' || colLower === 'accion' || colLower === 'acción') val = log.action_type || '';
       else if (colLower === 'nss') val = log.nss || '';
       else if (colLower === 'curp') val = log.curp || '';
       else if (colLower === 'message' || colLower === 'mensaje') val = log.message || '';
-      else if (colLower === 'error' || (colLower === 'status' && columns.includes('Regla'))) {
+      else if (colLower === 'error' || (colLower === 'status' && columns.some(c => c.toLowerCase() === 'regla'))) {
         val = log.error || '';
         if (val.toLowerCase() === 'email') {
           val = 'enviado por Email';
@@ -1437,8 +1437,10 @@ function generateCustomCsvFromDb(columns: string[], timeRange: string = 'today',
 
 // Programar tareas para reportes y plantillas personalizadas
 setInterval(async () => {
-  const now = new Date();
-  const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  const nowStr = new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City', hour12: false, hour: '2-digit', minute: '2-digit' });
+  // nowStr might be "24:00" instead of "00:00" in some environments, so let's parse it safely
+  const timeStr = nowStr.replace('24:', '00:');
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
   const dateStr = getLocalDateStr();
 
   // 1. Reporte Global (Email)
