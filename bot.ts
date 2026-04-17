@@ -219,12 +219,12 @@ export async function startBot() {
               
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
               
-              let currentLimit = 100;
+              let currentLimit = 1000;
               let reachedTargetDate = false;
               let consecutiveErrors = 0;
               let lastMessageCount = 0;
 
-              while (!reachedTargetDate && currentLimit <= 5000) {
+              while (!reachedTargetDate && currentLimit <= 15000) {
                 try {
                   const batch = await targetChat.fetchMessages({ limit: currentLimit });
                   messages = batch;
@@ -239,26 +239,25 @@ export async function startBot() {
                   if (oldestMsg.timestamp <= targetTimestamp) {
                     reachedTargetDate = true;
                   } else {
-                    currentLimit += 200; // Increase limit to fetch older messages
-                    // Add a small delay to avoid overwhelming the WhatsApp Web client
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    currentLimit += 1500; // Jump much higher to prevent O(N) repetitive DOM scrolling
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Sleep longer to clean memory
                   }
                   consecutiveErrors = 0;
                 } catch (fetchErr: any) {
                   if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
                     consecutiveErrors++;
-                    if (consecutiveErrors > 10) { // Increased max retries
+                    if (consecutiveErrors > 12) { // Increased max retries
                       log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación para este chat.`);
                       break;
                     }
-                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 10 segundos antes de reintentar...`);
+                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 15 segundos antes de reintentar...`);
                     try { 
                       await targetChat.syncHistory(); 
                       if (client && client.interface) {
                         await client.interface.openChatWindow(targetChat.id._serialized);
                       }
                     } catch (e) { /* ignore */ }
-                    await new Promise(resolve => setTimeout(resolve, 10000)); // Increased wait time to 10 seconds
+                    await new Promise(resolve => setTimeout(resolve, 15000)); // Increased wait time to 15 seconds
                   } else {
                     log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
                     break;
@@ -272,38 +271,27 @@ export async function startBot() {
               const targetLimit = config.initialFetchLimit || 50;
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${targetLimit} mensajes...`);
               
-              let currentLimit = Math.min(50, targetLimit);
               let consecutiveErrors = 0;
-              let lastMessageCount = 0;
 
-              while (currentLimit <= targetLimit) {
+              while (consecutiveErrors <= 12) {
                 try {
-                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
-                  messages = batch;
-                  
-                  if (batch.length === 0 || batch.length === lastMessageCount || batch.length >= targetLimit) {
-                    break;
-                  }
-                  lastMessageCount = batch.length;
-                  
-                  currentLimit = Math.min(currentLimit + 100, targetLimit);
-                  await new Promise(resolve => setTimeout(resolve, 1000));
-                  consecutiveErrors = 0;
+                  messages = await targetChat.fetchMessages({ limit: targetLimit });
+                  break; 
                 } catch (fetchErr: any) {
                   if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
                     consecutiveErrors++;
-                    if (consecutiveErrors > 10) {
+                    if (consecutiveErrors > 12) {
                       log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación.`);
                       break;
                     }
-                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 10 segundos...`);
+                    log('WARN', `El chat "${chatConf.targetContact}" aún está sincronizando desde el teléfono. Esperando 15 segundos...`);
                     try { 
                       await targetChat.syncHistory(); 
                       if (client && client.interface) {
                         await client.interface.openChatWindow(targetChat.id._serialized);
                       }
                     } catch (e) { /* ignore */ }
-                    await new Promise(resolve => setTimeout(resolve, 10000));
+                    await new Promise(resolve => setTimeout(resolve, 15000));
                   } else {
                     log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
                     break;
@@ -753,15 +741,15 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
       log('INFO', `Revisando historial del chat "${chat.name}" para validación...`);
       
       let messages = [];
-      let currentLimit = 100;
+      let currentLimit = 1000;
       let reachedTargetDate = false;
       let consecutiveErrors = 0;
       let lastMessageCount = 0;
-      const maxLimit = endDate ? 10000 : 5000;
+      const maxLimit = endDate ? 25000 : 15000;
 
       while (!reachedTargetDate && currentLimit <= maxLimit) {
         try {
-          const batch = await safeFetchMessages(chat, { limit: currentLimit });
+          const batch = await chat.fetchMessages({ limit: currentLimit });
           messages = batch;
           
           if (batch.length === 0 || batch.length === lastMessageCount) {
@@ -773,25 +761,25 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
           if (oldestMsg.timestamp <= startOfDay) {
             reachedTargetDate = true;
           } else {
-            currentLimit += 200;
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            currentLimit += 2000;
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
           consecutiveErrors = 0;
         } catch (fetchErr: any) {
           if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
             consecutiveErrors++;
-            if (consecutiveErrors > 10) {
+            if (consecutiveErrors > 12) {
               log('ERROR', `Demasiados errores al cargar el chat "${chat.name}". Abortando barrido para este chat.`);
               break;
             }
-            log('WARN', `El chat "${chat.name}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 10 segundos antes de reintentar...`);
+            log('WARN', `El chat "${chat.name}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 15 segundos antes de reintentar...`);
             try { 
               await chat.syncHistory(); 
               if (client && client.interface) {
                 await client.interface.openChatWindow(chat.id._serialized);
               }
             } catch (e) { /* ignore */ }
-            await new Promise(resolve => setTimeout(resolve, 10000));
+            await new Promise(resolve => setTimeout(resolve, 15000));
           } else {
             log('ERROR', `Error inesperado al buscar mensajes en "${chat.name}": ${fetchErr.message}`);
             break;
