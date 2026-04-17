@@ -34,7 +34,11 @@ import {
   ShieldCheck,
   Zap,
   Layers,
-  Save
+  Save,
+  Eraser,
+  Scan,
+  Unlock,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
@@ -315,6 +319,62 @@ export default function App() {
       console.error("Error fetching logs", e);
     }
   }, []);
+
+  const handleClearTerminal = async () => {
+    try {
+      await fetch('/api/logs', { method: 'DELETE' });
+      setLogs([]);
+      toast.success("Terminal limpiada");
+    } catch (e) {
+      console.error("Error al limpiar la terminal", e);
+      toast.error("Error al limpiar terminal");
+    }
+  };
+
+  const renderLogMessage = (msg: string, level: string) => {
+    const lowerMsg = msg.toLowerCase();
+    
+    // Pattern matching for cool animations
+    if (lowerMsg.includes('iniciando motor')) {
+      return <><RefreshCw className="inline animate-spin mr-1.5 text-blue-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('código qr generado') || lowerMsg.includes('esperando escaneo')) {
+      return <><Scan className="inline animate-pulse mr-1.5 text-blue-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('autenticación exitosa')) {
+      return <><Unlock className="inline mr-1.5 text-emerald-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('conectado y listo')) {
+      return <><CheckCircle2 className="inline mr-1.5 text-emerald-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('cargando') || lowerMsg.includes('obteniendo lista')) {
+      return <><Loader2 className="inline animate-spin mr-1.5 text-amber-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('archivo detectado') || lowerMsg.includes('descarga')) {
+      return <><Download className="inline animate-bounce mr-1.5 text-blue-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('pdf')) {
+      return <><FileText className="inline mr-1.5 text-rose-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('enviando reporte') || lowerMsg.includes('email')) {
+      return <><Mail className="inline animate-pulse mr-1.5 text-violet-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('whatsapp') && !lowerMsg.includes('conectado y listo') && !lowerMsg.includes('iniciando motor') && !lowerMsg.includes('deteniendo')) {
+      return <><MessageSquare className="inline animate-bounce mr-1.5 text-emerald-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('deteniendo') || lowerMsg.includes('detenido')) {
+      return <><Square className="inline mr-1.5 text-rose-500 mb-0.5" size={16} /> {msg}</>;
+    }
+    if (lowerMsg.includes('limpieza') || lowerMsg.includes('eliminaron')) {
+      return <><Eraser className="inline mr-1.5 text-amber-500 mb-0.5" size={16} /> {msg.replace('🧹 ', '').replace('🧹', '')}</>;
+    }
+    if (level === 'ERROR' || lowerMsg.includes('error') || lowerMsg.includes('abortando')) {
+      return <><AlertTriangle className="inline animate-pulse mr-1.5 text-rose-600 mb-0.5" size={16} /> {msg.replace('❌ ', '').replace('❌', '')}</>;
+    }
+    
+    // Default fallback
+    return <>{msg.replace(/✅/g, '').replace(/❌/g, '').replace(/📄/g, '').replace(/🔎/g, '').replace(/🔍/g, '')}</>;
+  };
 
   const logsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -1131,35 +1191,46 @@ export default function App() {
                       icon={Database} 
                       className="h-full flex flex-col"
                       action={
-                        <button 
-                          onClick={() => setAutoScroll(!autoScroll)}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold uppercase tracking-wider transition-all ${
-                            autoScroll 
-                            ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' 
-                            : 'bg-zinc-800 text-zinc-500 border-zinc-700'
-                          }`}
-                        >
-                          {autoScroll ? <CheckCircle2 size={12} /> : <Hash size={12} />}
-                          Auto-Scroll: {autoScroll ? 'ON' : 'OFF'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={handleClearTerminal}
+                            className="flex items-center justify-center p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors"
+                            title="Limpiar Terminal"
+                          >
+                            <Eraser size={14} />
+                          </button>
+                          <button 
+                            onClick={() => setAutoScroll(!autoScroll)}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] font-bold uppercase tracking-wider transition-all ${
+                              autoScroll 
+                              ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' 
+                              : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                            }`}
+                          >
+                            {autoScroll ? <CheckCircle2 size={12} /> : <Hash size={12} />}
+                            Auto-Scroll
+                          </button>
+                        </div>
                       }
                     >
                       <div 
                         ref={logsContainerRef}
-                        className="flex-1 overflow-y-auto h-[500px] font-mono text-[11px] space-y-1 p-2 bg-[#828385] text-black custom-scrollbar rounded-lg shadow-inner"
+                        className="flex-1 overflow-y-auto h-[500px] font-mono text-sm space-y-1.5 p-3 bg-zinc-950/80 text-zinc-300 custom-scrollbar rounded-lg shadow-inner border border-zinc-800/50"
                       >
                         {logs.length === 0 ? (
-                          <p className="text-zinc-600 italic">Esperando eventos...</p>
+                          <p className="text-zinc-600 italic text-center py-10">Esperando eventos o terminal limpia...</p>
                         ) : (
                           logs.map((log, i) => (
-                            <div key={i} className="flex gap-3 py-1 border-b border-zinc-400/30 last:border-0">
-                              <span className="text-zinc-600 shrink-0">[{new Date(log.time).toLocaleTimeString()}]</span>
-                              <span className={`font-bold shrink-0 w-12 ${
-                                log.level === 'ERROR' ? 'text-rose-600' : 
-                                log.level === 'WARN' ? 'text-amber-600' : 
-                                log.level === 'INFO' ? 'text-blue-600' : 'text-zinc-600'
+                            <div key={i} className="flex gap-3 py-1 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-900/50 rounded px-1 -mx-1 transition-colors">
+                              <span className="text-zinc-500 shrink-0 select-none">[{new Date(log.time).toLocaleTimeString()}]</span>
+                              <span className={`font-bold shrink-0 w-14 select-none ${
+                                log.level === 'ERROR' ? 'text-rose-500' : 
+                                log.level === 'WARN' ? 'text-amber-500' : 
+                                log.level === 'INFO' ? 'text-emerald-500' : 'text-blue-500'
                               }`}>{log.level}</span>
-                              <span className="text-black break-words">{log.message}</span>
+                              <span className="text-zinc-200 break-words flex-1 leading-relaxed">
+                                {renderLogMessage(log.message, log.level)}
+                              </span>
                             </div>
                           ))
                         )}

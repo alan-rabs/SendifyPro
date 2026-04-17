@@ -83,6 +83,11 @@ async function startServer() {
     res.json(logs);
   });
 
+  app.delete("/api/logs", (req, res) => {
+    logs.length = 0;
+    res.json({ success: true });
+  });
+
   app.get("/api/settings", (req, res) => {
     res.json(getConfig());
   });
