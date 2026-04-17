@@ -193,6 +193,9 @@ export async function startBot() {
     log('INFO', `Escuchando mensajes de ${config.chatConfigs?.length || 0} chats configurados.`);
 
     try {
+      log('INFO', 'Esperando 10 segundos para permitir la sincronización inicial de chats...');
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      
       log('INFO', `Obteniendo lista de chats para recuperar mensajes pendientes (esto puede demorar)...`);
       const chats = await client.getChats();
       let totalProcessed = 0;
@@ -223,7 +226,7 @@ export async function startBot() {
 
               while (!reachedTargetDate && currentLimit <= 5000) {
                 try {
-                  const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
+                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
                   messages = batch;
                   
                   if (batch.length === 0 || batch.length === lastMessageCount) {
@@ -275,7 +278,7 @@ export async function startBot() {
 
               while (currentLimit <= targetLimit) {
                 try {
-                  const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
+                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
                   messages = batch;
                   
                   if (batch.length === 0 || batch.length === lastMessageCount || batch.length >= targetLimit) {
@@ -373,55 +376,6 @@ export async function startBot() {
     log('ERROR', `Error al inicializar el cliente: ${err.message}`);
     botStatus = 'error';
     client = null;
-  }
-}
-
-async function safeFetchMessages(chat: any, searchOptions: any) {
-  try {
-    let messages = await client.pupPage.evaluate(async (chatId: string, searchOptions: any) => {
-      const msgFilter = (m: any) => {
-        if (m.isNotification) return false;
-        if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
-        return true;
-      };
-
-      const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
-      if (!chatObj) throw new Error('Chat object not found in WWebJS');
-      if (!chatObj.msgs) throw new Error('Chat object has no msgs property');
-
-      let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
-
-      if (searchOptions && searchOptions.limit > 0) {
-        while (msgs.length < searchOptions.limit) {
-          let loadedMessages;
-          try {
-            loadedMessages = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-          } catch (err: any) {
-            if (err && err.message && err.message.includes('waitForChatLoading')) {
-              throw err; // Re-throw to let the outer loop handle retries
-            }
-            console.error('Error loading earlier msgs:', err.message);
-            break; // Stop trying to load more if it fails with other errors, just return what we have
-          }
-          if (!loadedMessages || !loadedMessages.length) break;
-          msgs = [...loadedMessages.filter(msgFilter), ...msgs];
-        }
-        
-        if (msgs.length > searchOptions.limit) {
-          msgs.sort((a: any, b: any) => (a.t > b.t) ? 1 : -1);
-          msgs = msgs.splice(msgs.length - searchOptions.limit);
-        }
-      }
-
-      return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
-    }, chat.id._serialized, searchOptions);
-
-    const Message = (pkg as any).Message;
-    return messages.map((m: any) => new Message(client, m));
-  } catch (err: any) {
-    console.error(`[safeFetchMessages] Evaluate failed for chat ${chat.name}:`, err.message);
-    // Fallback to the original method if evaluate fails completely
-    return await chat.fetchMessages(searchOptions);
   }
 }
 
