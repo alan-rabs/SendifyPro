@@ -537,9 +537,15 @@ export default function App() {
     try {
       const res = await fetch('/api/update/check');
       const data = await res.json();
-      setUpdateInfo(data);
+      
+      if (res.ok) {
+        setUpdateInfo(data);
+      } else {
+        toast.error(data.error || "No se pudo consultar el repositorio. Revisa los datos de GitHub.");
+      }
     } catch (e) {
       console.error("Error checking updates", e);
+      toast.error("Error validando actualizaciones");
     }
   };
 
