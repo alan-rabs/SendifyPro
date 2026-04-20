@@ -154,42 +154,6 @@ function cleanupOrphanedTempFiles() {
   }
 }
 
-async function ensureChatLoaded(chat: any, targetLimit: number): Promise<boolean> {
-  if (!client || !client.pupPage) return false;
-  try {
-    return await client.pupPage.evaluate(async (chatId: string, limit: number) => {
-      const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
-      if (!chatObj) return false;
-      
-      let failures = 0;
-      while (chatObj.msgs.getModelsArray().length < limit && failures < 15) {
-        try {
-          const loaded = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-          if (!loaded || loaded.length === 0) {
-            // No more messages exist on the phone to load
-            break; 
-          }
-          failures = 0;
-          await new Promise(r => setTimeout(r, 500)); // Give DOM/Memory time to breathe
-        } catch (err: any) {
-          if (err && err.message && err.message.includes('waitForChatLoading')) {
-            failures++;
-            // The request to the phone is placed. Just wait for it to process in the background.
-            await new Promise(r => setTimeout(r, 3000));
-          } else {
-            // Unhandled error
-            break;
-          }
-        }
-      }
-      return true;
-    }, chat.id._serialized, targetLimit);
-  } catch (err) {
-    console.error(`Error in ensureChatLoaded for ${chat.name}:`, err);
-    return false;
-  }
-}
-
 export async function startBot() {
   if (client) {
     log('WARN', 'El bot ya está en ejecución o iniciando.');
@@ -255,19 +219,17 @@ export async function startBot() {
               
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
               
-              let currentLimit = 1000;
+              let currentLimit = 100;
               let reachedTargetDate = false;
               let consecutiveErrors = 0;
               let lastMessageCount = 0;
 
-              while (!reachedTargetDate && currentLimit <= 15000) {
+              while (!reachedTargetDate && currentLimit <= 4000) {
                 try {
-                  await ensureChatLoaded(targetChat, currentLimit);
-                  const batch = await targetChat.fetchMessages({ limit: currentLimit });
+                  const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
                   messages = batch;
                   
                   if (batch.length === 0 || batch.length === lastMessageCount) {
-                    // No more messages available in the chat history
                     break;
                   }
                   lastMessageCount = batch.length;
@@ -276,29 +238,14 @@ export async function startBot() {
                   if (oldestMsg.timestamp <= targetTimestamp) {
                     reachedTargetDate = true;
                   } else {
-                    currentLimit += 1500; // Jump much higher to prevent O(N) repetitive DOM scrolling
-                    await new Promise(resolve => setTimeout(resolve, 2000)); // Sleep longer to clean memory
+                    currentLimit += 200; 
+                    await new Promise(resolve => setTimeout(resolve, 1000)); 
                   }
                   consecutiveErrors = 0;
                 } catch (fetchErr: any) {
-                  if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
-                    consecutiveErrors++;
-                    if (consecutiveErrors > 12) { // Increased max retries
-                      log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación para este chat.`);
-                      break;
-                    }
-                    log('WARN', `El chat "${chatConf.targetContact}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 15 segundos antes de reintentar...`);
-                    try { 
-                      await targetChat.syncHistory(); 
-                      if (client && client.interface) {
-                        await client.interface.openChatWindow(targetChat.id._serialized);
-                      }
-                    } catch (e) { /* ignore */ }
-                    await new Promise(resolve => setTimeout(resolve, 15000)); // Increased wait time to 15 seconds
-                  } else {
-                    log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
-                    break;
-                  }
+                  consecutiveErrors++;
+                  if (consecutiveErrors > 5) break;
+                  await new Promise(r => setTimeout(r, 5000));
                 }
               }
               
@@ -308,32 +255,27 @@ export async function startBot() {
               const targetLimit = config.initialFetchLimit || 50;
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${targetLimit} mensajes...`);
               
+              let currentLimit = Math.min(50, targetLimit);
               let consecutiveErrors = 0;
+              let lastMessageCount = 0;
 
-              while (consecutiveErrors <= 12) {
+              while (currentLimit <= targetLimit) {
                 try {
-                  await ensureChatLoaded(targetChat, targetLimit);
-                  messages = await targetChat.fetchMessages({ limit: targetLimit });
-                  break; 
-                } catch (fetchErr: any) {
-                  if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
-                    consecutiveErrors++;
-                    if (consecutiveErrors > 12) {
-                      log('ERROR', `Demasiados errores al cargar el chat "${chatConf.targetContact}". Abortando recuperación.`);
-                      break;
-                    }
-                    log('WARN', `El chat "${chatConf.targetContact}" aún está sincronizando desde el teléfono. Esperando 15 segundos...`);
-                    try { 
-                      await targetChat.syncHistory(); 
-                      if (client && client.interface) {
-                        await client.interface.openChatWindow(targetChat.id._serialized);
-                      }
-                    } catch (e) { /* ignore */ }
-                    await new Promise(resolve => setTimeout(resolve, 15000));
-                  } else {
-                    log('ERROR', `Error inesperado al buscar mensajes en "${chatConf.targetContact}": ${fetchErr.message}`);
+                  const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
+                  messages = batch;
+                  
+                  if (batch.length === 0 || batch.length === lastMessageCount || batch.length >= targetLimit) {
                     break;
                   }
+                  lastMessageCount = batch.length;
+                  
+                  currentLimit = Math.min(currentLimit + 100, targetLimit);
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                  consecutiveErrors = 0;
+                } catch (fetchErr) {
+                  consecutiveErrors++;
+                  if (consecutiveErrors > 5) break;
+                  await new Promise(r => setTimeout(r, 5000));
                 }
               }
             }
@@ -402,6 +344,64 @@ export async function startBot() {
     log('ERROR', `Error al inicializar el cliente: ${err.message}`);
     botStatus = 'error';
     client = null;
+  }
+}
+
+async function safeFetchMessages(chat: any, searchOptions: any) {
+  try {
+    let messages = await client.pupPage.evaluate(async (chatId: string, searchOptions: any) => {
+      const msgFilter = (m: any) => {
+        if (m.isNotification) return false;
+        if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
+        return true;
+      };
+
+      const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
+      let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
+
+      if (searchOptions && searchOptions.limit > 0) {
+        let failures = 0;
+        let lastLength = msgs.length;
+        while (msgs.length < searchOptions.limit && failures < 10) {
+          try {
+            const loaded = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+            if (!loaded || !loaded.length) {
+              failures++;
+            } else {
+              failures = 0;
+            }
+            msgs = [...loaded.filter(msgFilter), ...msgs];
+            
+            if (msgs.length === lastLength) {
+                failures++;
+            } else {
+                lastLength = msgs.length;
+            }
+            await new Promise(r => setTimeout(r, 800)); // Relieve Chromium DOM
+          } catch(e) {
+            failures++;
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+        
+        if (msgs.length > searchOptions.limit) {
+          msgs.sort((a: any, b: any) => (a.t > b.t) ? 1 : -1);
+          msgs = msgs.splice(msgs.length - searchOptions.limit);
+        }
+      }
+
+      return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
+    }, chat.id._serialized, searchOptions);
+
+    for (const msg of messages) {
+       Object.defineProperty(msg, 'client', { get: () => client, enumerable: false });
+       msg.acceptGroupV4Invite = async () => false;
+    }
+    
+    return messages;
+  } catch (err: any) {
+    console.error(`Error in safeFetchMessages for ${chat.name}:`, err);
+    return [];
   }
 }
 
@@ -779,16 +779,15 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
       log('INFO', `Revisando historial del chat "${chat.name}" para validación...`);
       
       let messages = [];
-      let currentLimit = 1000;
+      let currentLimit = 100;
       let reachedTargetDate = false;
       let consecutiveErrors = 0;
       let lastMessageCount = 0;
-      const maxLimit = endDate ? 25000 : 15000;
+      const maxLimit = endDate ? 10000 : 5000;
 
       while (!reachedTargetDate && currentLimit <= maxLimit) {
         try {
-          await ensureChatLoaded(chat, currentLimit);
-          const batch = await chat.fetchMessages({ limit: currentLimit });
+          const batch = await safeFetchMessages(chat, { limit: currentLimit });
           messages = batch;
           
           if (batch.length === 0 || batch.length === lastMessageCount) {
@@ -800,29 +799,14 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
           if (oldestMsg.timestamp <= startOfDay) {
             reachedTargetDate = true;
           } else {
-            currentLimit += 2000;
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            currentLimit += 200;
+            await new Promise(resolve => setTimeout(resolve, 1000));
           }
           consecutiveErrors = 0;
         } catch (fetchErr: any) {
-          if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
-            consecutiveErrors++;
-            if (consecutiveErrors > 12) {
-              log('ERROR', `Demasiados errores al cargar el chat "${chat.name}". Abortando barrido para este chat.`);
-              break;
-            }
-            log('WARN', `El chat "${chat.name}" aún está cargando. Solicitando sincronización, abriendo chat y esperando 15 segundos antes de reintentar...`);
-            try { 
-              await chat.syncHistory(); 
-              if (client && client.interface) {
-                await client.interface.openChatWindow(chat.id._serialized);
-              }
-            } catch (e) { /* ignore */ }
-            await new Promise(resolve => setTimeout(resolve, 15000));
-          } else {
-            log('ERROR', `Error inesperado al buscar mensajes en "${chat.name}": ${fetchErr.message}`);
-            break;
-          }
+           consecutiveErrors++;
+           if (consecutiveErrors > 5) break;
+           await new Promise(r => setTimeout(r, 5000));
         }
       }
       
