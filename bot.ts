@@ -355,52 +355,53 @@ export async function startBot() {
 
 async function safeFetchMessages(chat: any, searchOptions: any) {
   try {
-    let messages = await client.pupPage.evaluate(async (chatId: string, searchOptions: any) => {
-      const __name = (func: any, name: string) => { Object.defineProperty(func, "name", { value: name, configurable: true }); return func; };
-      (window as any).__name = __name;
-      
-      const msgFilter = (m: any) => {
-        if (m.isNotification) return false;
-        if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
-        return true;
-      };
+    let evalFunc = new Function('chatId', 'searchOptions', `
+      return (async () => {
+        const msgFilter = (m) => {
+          if (m.isNotification) return false;
+          if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
+          return true;
+        };
 
-      const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
-      let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
+        const chatObj = await window.WWebJS.getChat(chatId, { getAsModel: false });
+        let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
 
-      if (searchOptions && searchOptions.limit > 0) {
-        let failures = 0;
-        let lastLength = msgs.length;
-        while (msgs.length < searchOptions.limit && failures < 10) {
-          try {
-            const loaded = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-            if (!loaded || !loaded.length) {
-              failures++;
-            } else {
-              failures = 0;
-            }
-            msgs = [...loaded.filter(msgFilter), ...msgs];
-            
-            if (msgs.length === lastLength) {
+        if (searchOptions && searchOptions.limit > 0) {
+          let failures = 0;
+          let lastLength = msgs.length;
+          while (msgs.length < searchOptions.limit && failures < 10) {
+            try {
+              const loaded = await window.Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+              if (!loaded || !loaded.length) {
                 failures++;
-            } else {
-                lastLength = msgs.length;
+              } else {
+                failures = 0;
+              }
+              msgs = [...loaded.filter(msgFilter), ...msgs];
+              
+              if (msgs.length === lastLength) {
+                  failures++;
+              } else {
+                  lastLength = msgs.length;
+              }
+              await new Promise(r => setTimeout(r, 800)); // Relieve Chromium DOM
+            } catch(e) {
+              failures++;
+              await new Promise(r => setTimeout(r, 2000));
             }
-            await new Promise(r => setTimeout(r, 800)); // Relieve Chromium DOM
-          } catch(e) {
-            failures++;
-            await new Promise(r => setTimeout(r, 2000));
+          }
+          
+          if (msgs.length > searchOptions.limit) {
+            msgs.sort((a, b) => (a.t > b.t) ? 1 : -1);
+            msgs = msgs.splice(msgs.length - searchOptions.limit);
           }
         }
-        
-        if (msgs.length > searchOptions.limit) {
-          msgs.sort((a: any, b: any) => (a.t > b.t) ? 1 : -1);
-          msgs = msgs.splice(msgs.length - searchOptions.limit);
-        }
-      }
 
-      return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
-    }, chat.id._serialized, searchOptions);
+        return msgs.map((m) => window.WWebJS.getMessageModel(m));
+      })();
+    `) as any;
+
+    let messages = await client.pupPage.evaluate(evalFunc, chat.id._serialized, searchOptions);
 
     let parsedMessages;
     try {
