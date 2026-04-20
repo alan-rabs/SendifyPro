@@ -1,5 +1,5 @@
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, Message } = pkg;
 import qrcode from 'qrcode';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
@@ -238,6 +238,8 @@ export async function startBot() {
                   if (oldestMsg.timestamp <= targetTimestamp) {
                     reachedTargetDate = true;
                   } else {
+                    const oldestDate = new Date(oldestMsg.timestamp * 1000).toLocaleDateString();
+                    log('INFO', `Mensaje más antiguo hasta ahora: ${oldestDate}. Aumentando búsqueda a ${currentLimit + 200} mensajes...`);
                     currentLimit += 200; 
                     await new Promise(resolve => setTimeout(resolve, 1000)); 
                   }
@@ -268,6 +270,10 @@ export async function startBot() {
                     break;
                   }
                   lastMessageCount = batch.length;
+                  
+                  if (currentLimit < targetLimit) {
+                    log('INFO', `Recuperados ${batch.length} de ${targetLimit} mensajes. Continuando...`);
+                  }
                   
                   currentLimit = Math.min(currentLimit + 100, targetLimit);
                   await new Promise(resolve => setTimeout(resolve, 1000));
@@ -393,14 +399,15 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
       return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
     }, chat.id._serialized, searchOptions);
 
-    for (const msg of messages) {
-       Object.defineProperty(msg, 'client', { get: () => client, enumerable: false });
+    let parsedMessages = messages.map((m: any) => new Message(client, m));
+
+    for (const msg of parsedMessages) {
        msg.acceptGroupV4Invite = async () => false;
     }
     
-    return messages;
+    return parsedMessages;
   } catch (err: any) {
-    console.error(`Error in safeFetchMessages for ${chat.name}:`, err);
+    log('ERROR', `Error oculto en safeFetchMessages para ${chat.name}: ${err.message || String(err)}`);
     return [];
   }
 }
@@ -799,6 +806,8 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
           if (oldestMsg.timestamp <= startOfDay) {
             reachedTargetDate = true;
           } else {
+            const oldestDate = new Date(oldestMsg.timestamp * 1000).toLocaleDateString();
+            log('INFO', `Barrido: Mensaje más antiguo: ${oldestDate}. Aumentando límite a ${currentLimit + 200}...`);
             currentLimit += 200;
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
