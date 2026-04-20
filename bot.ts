@@ -369,9 +369,10 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
         if (searchOptions && searchOptions.limit > 0) {
           let failures = 0;
           let lastLength = msgs.length;
+          let lastError = null;
           while (msgs.length < searchOptions.limit && failures < 10) {
             try {
-              const loaded = await window.Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+              const loaded = await window.Store.ConversationMsgs.loadEarlierMsgs(chatObj);
               if (!loaded || !loaded.length) {
                 failures++;
               } else {
@@ -384,11 +385,16 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
               } else {
                   lastLength = msgs.length;
               }
-              await new Promise(r => setTimeout(r, 800)); // Relieve Chromium DOM
+              await new Promise(r => setTimeout(r, 800));
             } catch(e) {
+              lastError = e.message || String(e);
               failures++;
               await new Promise(r => setTimeout(r, 2000));
             }
+          }
+          
+          if (failures >= 10 && lastError) {
+              throw new Error("Chromium Fetch Error: " + lastError);
           }
           
           if (msgs.length > searchOptions.limit) {
