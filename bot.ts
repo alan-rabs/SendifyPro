@@ -250,24 +250,7 @@ export async function startBot() {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
                   }
-                  if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
-                     
-                     // Si es el mismo error de sincronización pero está intentando activamente descargar, 
-                     // reiniciamos el contador siempre y cuando esté logrando bajar más bloques.
-                     try {
-                        const loadedNow = await safeFetchMessages(targetChat, { limit: 0 });
-                        if (loadedNow && loadedNow.length > ((targetChat as any)._lastMessageCount || 0)) {
-                            consecutiveErrors = 0; 
-                        }
-                        (targetChat as any)._lastMessageCount = loadedNow ? loadedNow.length : 0;
-                     } catch(e) { }
-
-                     log('WARN', `El chat "${targetChat.name}" requiere descargar historial desde el teléfono para alcanzar fechas anteriores. Esperando 15 segundos a que sincronice...`);
-                     try { await targetChat.syncHistory(); } catch(e){}
-                     await new Promise(r => setTimeout(r, 15000));
-                  } else {
-                     await new Promise(r => setTimeout(r, 5000));
-                  }
+                  await new Promise(r => setTimeout(r, 5000));
                 }
               }
               
@@ -304,21 +287,7 @@ export async function startBot() {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
                   }
-                  if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
-                     try {
-                        const loadedNow = await safeFetchMessages(targetChat, { limit: 0 });
-                        if (loadedNow && loadedNow.length > ((targetChat as any)._lastMessageCountCountMode || 0)) {
-                            consecutiveErrors = 0; 
-                        }
-                        (targetChat as any)._lastMessageCountCountMode = loadedNow ? loadedNow.length : 0;
-                     } catch(e) { }
-
-                     log('WARN', `El chat "${targetChat.name}" requiere descargar historial desde el teléfono para obtener más mensajes. Esperando 15 segundos a que sincronice...`);
-                     try { await targetChat.syncHistory(); } catch(e){}
-                     await new Promise(r => setTimeout(r, 15000));
-                  } else {
-                     await new Promise(r => setTimeout(r, 5000));
-                  }
+                  await new Promise(r => setTimeout(r, 5000));
                 }
               }
             }
@@ -409,7 +378,7 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
           let lastError = null;
           while (msgs.length < searchOptions.limit && failures < 10) {
             try {
-              const loaded = await window.Store.ConversationMsgs.loadEarlierMsgs(chatObj);
+              const loaded = await window.Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
               if (!loaded || !loaded.length) {
                 failures++;
               } else {
@@ -880,21 +849,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
               log('ERROR', `Demasiados errores al validar chat "${chat.name}". Abortando validación.`);
               break;
            }
-           if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
-              try {
-                  const loadedNow = await safeFetchMessages(chat, { limit: 0 });
-                  if (loadedNow && loadedNow.length > ((chat as any)._lastMessageCountSweepMode || 0)) {
-                      consecutiveErrors = 0; 
-                  }
-                  (chat as any)._lastMessageCountSweepMode = loadedNow ? loadedNow.length : 0;
-              } catch(e) { }
-
-              log('WARN', `Barrido: El chat "${chat.name}" requiere descargar historial desde el teléfono para alcanzar mensajes pasados. Esperando 15 segundos a que sincronice...`);
-              try { await chat.syncHistory(); } catch(e){}
-              await new Promise(r => setTimeout(r, 15000));
-           } else {
-              await new Promise(r => setTimeout(r, 5000));
-           }
+           await new Promise(r => setTimeout(r, 5000));
         }
       }
       
