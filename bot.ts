@@ -154,6 +154,42 @@ function cleanupOrphanedTempFiles() {
   }
 }
 
+async function ensureChatLoaded(chat: any, targetLimit: number): Promise<boolean> {
+  if (!client || !client.pupPage) return false;
+  try {
+    return await client.pupPage.evaluate(async (chatId: string, limit: number) => {
+      const chatObj = await (window as any).WWebJS.getChat(chatId, { getAsModel: false });
+      if (!chatObj) return false;
+      
+      let failures = 0;
+      while (chatObj.msgs.getModelsArray().length < limit && failures < 15) {
+        try {
+          const loaded = await (window as any).Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+          if (!loaded || loaded.length === 0) {
+            // No more messages exist on the phone to load
+            break; 
+          }
+          failures = 0;
+          await new Promise(r => setTimeout(r, 500)); // Give DOM/Memory time to breathe
+        } catch (err: any) {
+          if (err && err.message && err.message.includes('waitForChatLoading')) {
+            failures++;
+            // The request to the phone is placed. Just wait for it to process in the background.
+            await new Promise(r => setTimeout(r, 3000));
+          } else {
+            // Unhandled error
+            break;
+          }
+        }
+      }
+      return true;
+    }, chat.id._serialized, targetLimit);
+  } catch (err) {
+    console.error(`Error in ensureChatLoaded for ${chat.name}:`, err);
+    return false;
+  }
+}
+
 export async function startBot() {
   if (client) {
     log('WARN', 'El bot ya está en ejecución o iniciando.');
@@ -226,6 +262,7 @@ export async function startBot() {
 
               while (!reachedTargetDate && currentLimit <= 15000) {
                 try {
+                  await ensureChatLoaded(targetChat, currentLimit);
                   const batch = await targetChat.fetchMessages({ limit: currentLimit });
                   messages = batch;
                   
@@ -275,6 +312,7 @@ export async function startBot() {
 
               while (consecutiveErrors <= 12) {
                 try {
+                  await ensureChatLoaded(targetChat, targetLimit);
                   messages = await targetChat.fetchMessages({ limit: targetLimit });
                   break; 
                 } catch (fetchErr: any) {
@@ -749,6 +787,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
       while (!reachedTargetDate && currentLimit <= maxLimit) {
         try {
+          await ensureChatLoaded(chat, currentLimit);
           const batch = await chat.fetchMessages({ limit: currentLimit });
           messages = batch;
           
