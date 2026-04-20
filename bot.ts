@@ -251,6 +251,14 @@ export async function startBot() {
                      break;
                   }
                   if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
+                     
+                     // Si es el mismo error de sincronización pero está intentando activamente descargar, 
+                     // reiniciamos el contador siempre y cuando esté logrando bajar más bloques.
+                     if (messages && messages.length > 0 && messages.length > (targetChat as any)._lastMessageCount) {
+                         consecutiveErrors = 0; 
+                     }
+                     (targetChat as any)._lastMessageCount = messages ? messages.length : 0;
+
                      log('WARN', `El chat "${targetChat.name}" requiere descargar historial desde el teléfono para alcanzar fechas anteriores. Esperando 15 segundos a que sincronice...`);
                      try { await targetChat.syncHistory(); } catch(e){}
                      await new Promise(r => setTimeout(r, 15000));
@@ -294,6 +302,11 @@ export async function startBot() {
                      break;
                   }
                   if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
+                     if (messages && messages.length > 0 && messages.length > (targetChat as any)._lastMessageCountCountMode) {
+                         consecutiveErrors = 0; 
+                     }
+                     (targetChat as any)._lastMessageCountCountMode = messages ? messages.length : 0;
+
                      log('WARN', `El chat "${targetChat.name}" requiere descargar historial desde el teléfono para obtener más mensajes. Esperando 15 segundos a que sincronice...`);
                      try { await targetChat.syncHistory(); } catch(e){}
                      await new Promise(r => setTimeout(r, 15000));
@@ -862,6 +875,11 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
               break;
            }
            if (fetchErr.message && fetchErr.message.includes('waitForChatLoading')) {
+              if (messages && messages.length > 0 && messages.length > (chat as any)._lastMessageCountSweepMode) {
+                  consecutiveErrors = 0; 
+              }
+              (chat as any)._lastMessageCountSweepMode = messages ? messages.length : 0;
+
               log('WARN', `Barrido: El chat "${chat.name}" requiere descargar historial desde el teléfono para alcanzar mensajes pasados. Esperando 15 segundos a que sincronice...`);
               try { await chat.syncHistory(); } catch(e){}
               await new Promise(r => setTimeout(r, 15000));
