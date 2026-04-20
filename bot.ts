@@ -356,6 +356,9 @@ export async function startBot() {
 async function safeFetchMessages(chat: any, searchOptions: any) {
   try {
     let messages = await client.pupPage.evaluate(async (chatId: string, searchOptions: any) => {
+      const __name = (func: any, name: string) => { Object.defineProperty(func, "name", { value: name, configurable: true }); return func; };
+      (window as any).__name = __name;
+      
       const msgFilter = (m: any) => {
         if (m.isNotification) return false;
         if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
@@ -399,7 +402,19 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
       return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
     }, chat.id._serialized, searchOptions);
 
-    let parsedMessages = messages.map((m: any) => new Message(client, m));
+    let parsedMessages;
+    try {
+      parsedMessages = messages.map((m: any) => new Message(client, m));
+    } catch(e: any) {
+      log('ERROR', `Error instanciating Message for ${chat.name}: ${e.message}`);
+      // Fallback
+      parsedMessages = messages;
+      for (const msg of parsedMessages) {
+         Object.defineProperty(msg, 'client', { get: () => client, enumerable: false });
+         msg.acceptGroupV4Invite = async () => false;
+      }
+      return parsedMessages;
+    }
 
     for (const msg of parsedMessages) {
        msg.acceptGroupV4Invite = async () => false;
