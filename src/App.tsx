@@ -598,6 +598,65 @@ export default function App() {
     }
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExportConfig = () => {
+    if (!config) return;
+    try {
+      const exportData = JSON.stringify(config, null, 2);
+      const blob = new Blob([exportData], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute('href', url);
+      downloadAnchorNode.setAttribute('download', `ramdia_backup_${new Date().toISOString().split('T')[0]}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      window.URL.revokeObjectURL(url);
+      downloadAnchorNode.remove();
+      toast.success("Configuración exportada correctamente y lista para guardar.");
+    } catch (e) {
+      toast.error("Error al exportar la configuración.");
+      console.error(e);
+    }
+  };
+
+  const handleImportConfig = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        
+        // Estricta comprobación de que el archivo es una exportación de Ramdia válida
+        if (typeof parsed !== 'object' || parsed === null) {
+          throw new Error("El archivo no tiene un formato válido.");
+        }
+        
+        if (!Array.isArray(parsed.chatConfigs)) {
+          throw new Error("El archivo no contiene 'chatConfigs'. No es un archivo de configuración válido para este bot.");
+        }
+
+        // Se podrían comprobar más campos, pero con chatConfigs ya nos aseguramos que es la estructura base correcta
+        setConfig({
+          ...config, // defaults
+          ...parsed
+        });
+        
+        // Se resetea el input para poder cargar el mismo archivo varias veces si se desea
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        
+        toast.success("Configuración cargada en pantalla. Revisa los cambios y haz clic en 'Guardar Cambios' para aplicarlos.", { duration: 5000 });
+      } catch (err: any) {
+        toast.error(`Error al importar: ${err.message}`);
+        console.error(err);
+      }
+    };
+    reader.readAsText(file);
+  };
+
   const handleClearCache = async () => {
     try {
       const res = await fetch('/api/bot/clear-cache', { method: 'POST' });
@@ -1630,6 +1689,42 @@ export default function App() {
                               </button>
                             </div>
                           </div>
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <Card title="Respaldo y Recuperación" icon={Download}>
+                    <div className="space-y-4">
+                      <p className="text-sm text-zinc-400">
+                        Exporta toda tu configuración actual (chats, reglas, auditorías, opciones globales) a un archivo, o impórtala para restaurarla.
+                      </p>
+                      
+                      <div className="flex flex-col sm:flex-row gap-4">
+                        <button 
+                          onClick={handleExportConfig}
+                          className="flex-1 flex justify-center items-center gap-2 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-lg font-bold text-sm transition-all border border-zinc-700"
+                        >
+                          <Download size={16} className="text-blue-400" />
+                          Descargar Respaldo JSON
+                        </button>
+                        
+                        <div className="flex-1 relative">
+                          <input 
+                            type="file" 
+                            accept=".json" 
+                            onChange={handleImportConfig}
+                            ref={fileInputRef}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <button 
+                            className="w-full flex justify-center items-center gap-2 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-lg font-bold text-sm transition-all border border-zinc-700 pointer-events-none"
+                          >
+                            <Plus size={16} className="text-amber-400" />
+                            Cargar Archivo JSON
+                          </button>
                         </div>
                       </div>
                     </div>
