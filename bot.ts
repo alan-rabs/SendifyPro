@@ -246,6 +246,7 @@ export async function startBot() {
                   consecutiveErrors = 0;
                 } catch (fetchErr: any) {
                   consecutiveErrors++;
+                  log('WARN', `Intento fallido de recuperación en "${targetChat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
                   if (consecutiveErrors > 12) {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
@@ -283,6 +284,7 @@ export async function startBot() {
                   consecutiveErrors = 0;
                 } catch (fetchErr: any) {
                   consecutiveErrors++;
+                  log('WARN', `Intento fallido de recuperación en "${targetChat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
                   if (consecutiveErrors > 12) {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
@@ -394,6 +396,9 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
               await new Promise(r => setTimeout(r, 800));
             } catch(e) {
               lastError = e.message || String(e);
+              if (failures === 0) {
+                 lastError += " | Fx: " + String(window.Store.ConversationMsgs.loadEarlierMsgs).substring(0, 200);
+              }
               failures++;
               await new Promise(r => setTimeout(r, 2000));
             }
@@ -439,7 +444,7 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
         throw err;
     }
     log('ERROR', `Error oculto en safeFetchMessages para ${chat.name}: ${err.message || String(err)}`);
-    return [];
+    throw err;
   }
 }
 
@@ -845,6 +850,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
           consecutiveErrors = 0;
         } catch (fetchErr: any) {
            consecutiveErrors++;
+           log('WARN', `Intento fallido de barrido en "${chat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
            if (consecutiveErrors > 12) {
               log('ERROR', `Demasiados errores al validar chat "${chat.name}". Abortando validación.`);
               break;
