@@ -77,6 +77,10 @@ const DEFAULT_CONFIG = {
   auditActionWaEnabled: false,
   auditWaTargets: '',
   auditWaSchedule: '23:59',
+  // Auto Power Settings
+  autoPowerEnabled: true,
+  autoPowerOffTime: '00:00',
+  autoPowerOnTime: '07:00',
   
   // Chat configs
   chatConfigs: [],
@@ -363,86 +367,39 @@ export async function startBot() {
 
 async function safeFetchMessages(chat: any, searchOptions: any) {
   try {
-    let evalFunc = new Function('chatId', 'searchOptions', `
-      return (async () => {
-        const msgFilter = (m) => {
-          if (m.isNotification) return false;
-          if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) return false;
-          return true;
-        };
-
-        const chatObj = await window.WWebJS.getChat(chatId, { getAsModel: false });
-        let msgs = chatObj.msgs.getModelsArray().filter(msgFilter);
-
-        if (searchOptions && searchOptions.limit > 0) {
-          let failures = 0;
-          let lastLength = msgs.length;
-          let lastError = null;
-          while (msgs.length < searchOptions.limit && failures < 10) {
-            try {
-              const loaded = await window.Store.ConversationMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-              if (!loaded || !loaded.length) {
-                failures++;
-              } else {
-                failures = 0;
-              }
-              msgs = [...loaded.filter(msgFilter), ...msgs];
-              
-              if (msgs.length === lastLength) {
-                  failures++;
-              } else {
-                  lastLength = msgs.length;
-              }
-              await new Promise(r => setTimeout(r, 800));
-            } catch(e) {
-              lastError = e.message || String(e);
-              if (failures === 0) {
-                 lastError += " | Fx: " + String(window.Store.ConversationMsgs.loadEarlierMsgs).substring(0, 200);
-              }
-              failures++;
-              await new Promise(r => setTimeout(r, 2000));
-            }
-          }
-          
-          if (failures >= 10 && lastError) {
-              throw new Error("Chromium Fetch Error: " + lastError);
-          }
-          
-          if (msgs.length > searchOptions.limit) {
-            msgs.sort((a, b) => (a.t > b.t) ? 1 : -1);
-            msgs = msgs.splice(msgs.length - searchOptions.limit);
-          }
+    let failures = 0;
+    let messages = [];
+    while (failures < 3) {
+      try {
+        messages = await chat.fetchMessages(searchOptions);
+        break; 
+      } catch (e: any) {
+        log('WARN', `Intento fallido nativo de recuperación en "${chat.name}" (${failures+1}/3): ${e.message}`);
+        failures++;
+        await new Promise(r => setTimeout(r, 2000));
+        if (failures >= 3) {
+          throw e;
         }
-
-        return msgs.map((m) => window.WWebJS.getMessageModel(m));
-      })();
-    `) as any;
-
-    let messages = await client.pupPage.evaluate(evalFunc, chat.id._serialized, searchOptions);
-
-    let parsedMessages;
-    try {
-      parsedMessages = messages.map((m: any) => new Message(client, m));
-    } catch(e: any) {
-      log('ERROR', `Error instanciating Message for ${chat.name}: ${e.message}`);
-      // Fallback
-      parsedMessages = messages;
-      for (const msg of parsedMessages) {
-         Object.defineProperty(msg, 'client', { get: () => client, enumerable: false });
-         msg.acceptGroupV4Invite = async () => false;
       }
-      return parsedMessages;
-    }
-
-    for (const msg of parsedMessages) {
-       msg.acceptGroupV4Invite = async () => false;
     }
     
+    let parsedMessages;
+    try {
+      parsedMessages = messages.map((m: any) => {
+         // Create safe wrapper or return raw model depending on WA Web JS version
+         // chat.fetchMessages natively returns Message objects!
+         if (m.acceptGroupV4Invite === undefined) {
+             m.acceptGroupV4Invite = async () => false;
+         }
+         return m;
+      });
+    } catch(e: any) {
+      log('ERROR', `Error instanciating Message for ${chat.name}: ${e.message}`);
+      parsedMessages = messages;
+    }
+
     return parsedMessages;
   } catch (err: any) {
-    if (err.message && err.message.includes('waitForChatLoading')) {
-        throw err;
-    }
     log('ERROR', `Error oculto en safeFetchMessages para ${chat.name}: ${err.message || String(err)}`);
     throw err;
   }
@@ -1633,6 +1590,22 @@ setInterval(async () => {
       }
     }
   }
+
+  // 5. Encendido/Apagado Automático
+  if (config.autoPowerEnabled) {
+    if (config.autoPowerOffTime === timeStr && (global as any).lastPowerAction !== `off_${dateStr}_${timeStr}`) {
+      (global as any).lastPowerAction = `off_${dateStr}_${timeStr}`;
+      log('INFO', 'Hora de apagado automático alcanzada. Deteniendo el bot...');
+      stopBot();
+    }
+    
+    if (config.autoPowerOnTime === timeStr && (global as any).lastPowerAction !== `on_${dateStr}_${timeStr}`) {
+      (global as any).lastPowerAction = `on_${dateStr}_${timeStr}`;
+      log('INFO', 'Hora de encendido automático alcanzada. Iniciando el bot...');
+      startBot();
+    }
+  }
+
 }, 60000); // Revisar cada minuto
 
 // Reiniciar estadísticas diarias a medianoche

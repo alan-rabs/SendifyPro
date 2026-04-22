@@ -159,6 +159,9 @@ interface Config {
   validationSweepFrequency?: 'daily' | 'weekly' | 'monthly';
   validationSweepTime?: string;
   validationSweepEmailTargets?: string;
+  autoPowerEnabled?: boolean;
+  autoPowerOffTime?: string;
+  autoPowerOnTime?: string;
   chatConfigs: ChatConfig[];
   auditTemplates?: AuditTemplate[];
 }
@@ -1505,6 +1508,49 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4">
+                  <Card title="Horarios de Operación (Auto-Power)" icon={Clock}>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-2 h-2 rounded-full ${config.autoPowerEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+                          <div className="flex flex-col">
+                            <span className="text-sm font-medium">Habilitar Encendido/Apagado Automático</span>
+                            <span className="text-xs text-zinc-500">El bot se encenderá y apagará solo en estas horas.</span>
+                          </div>
+                        </div>
+                        <input 
+                          type="checkbox" 
+                          checked={config.autoPowerEnabled ?? true} 
+                          onChange={e => setConfig({...config, autoPowerEnabled: e.target.checked})}
+                          className="w-5 h-5 accent-zinc-100"
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Hora de Apagado (Default 00:00)</label>
+                          <input 
+                            type="time" 
+                            value={config.autoPowerOffTime || '00:00'} 
+                            onChange={e => setConfig({...config, autoPowerOffTime: e.target.value})}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
+                            disabled={!(config.autoPowerEnabled ?? true)}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Hora de Encendido (Default 07:00)</label>
+                          <input 
+                            type="time" 
+                            value={config.autoPowerOnTime || '07:00'} 
+                            onChange={e => setConfig({...config, autoPowerOnTime: e.target.value})}
+                            className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:border-zinc-500 outline-none transition-all disabled:opacity-50"
+                            disabled={!(config.autoPowerEnabled ?? true)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+
                   <Card title="Configuración General del Bot" icon={Settings}>
                     <div className="space-y-4">
                       <div className="flex flex-col gap-4 p-4 bg-zinc-950 border border-zinc-800 rounded-lg">
