@@ -391,7 +391,10 @@ async function patchWAWebMessageLoader(): Promise<void> {
   try {
     const patched = await client.pupPage.evaluate((): boolean => {
       try {
-        const mod = (window as any).require?.('WAWebChatLoadMessages');
+        // Usar window.Store.ConversationMsgs (ya configurado por wwebjs al conectar).
+        // window.require('WAWebChatLoadMessages') no está disponible post-inicialización
+        // en versiones recientes de WA Web.
+        const mod = (window as any).Store?.ConversationMsgs;
         if (!mod?.loadEarlierMsgs) return false;
         if ((mod as any).__wwjsPatch) return true;
 
