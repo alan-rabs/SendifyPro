@@ -197,8 +197,8 @@ export async function startBot() {
     log('INFO', `Escuchando mensajes de ${config.chatConfigs?.length || 0} chats configurados.`);
 
     try {
-      log('INFO', 'Esperando 10 segundos para permitir la sincronización inicial de chats...');
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      log('INFO', 'Esperando 20 segundos para permitir la sincronización inicial de chats...');
+      await new Promise(resolve => setTimeout(resolve, 20000));
       
       log('INFO', `Obteniendo lista de chats para recuperar mensajes pendientes (esto puede demorar)...`);
       const chats = await client.getChats();
@@ -215,6 +215,12 @@ export async function startBot() {
 
         if (targetChat) {
           try {
+            // Pre-warm: abrir el chat para inicializar el estado interno de WhatsApp
+            try {
+              await (client as any).interface.openChatWindow(targetChat.id._serialized);
+              await new Promise(r => setTimeout(r, 3000));
+            } catch (_) { /* ignorar errores de pre-warm */ }
+
             let messages = [];
             if (config.initialFetchMode === 'date') {
               const targetDate = new Date(config.initialFetchDate || new Date());
@@ -255,10 +261,13 @@ export async function startBot() {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
                   }
+                  if ((fetchErr.message || '').includes('waitForChatLoading') && client) {
+                    try { await (client as any).interface.openChatWindow(targetChat.id._serialized); } catch (_) { /* ignorar */ }
+                  }
                   await new Promise(r => setTimeout(r, 5000));
                 }
               }
-              
+
               messages = messages.filter((m: any) => m.timestamp >= targetTimestamp);
               log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
             } else {
@@ -292,6 +301,9 @@ export async function startBot() {
                   if (consecutiveErrors > 12) {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
+                  }
+                  if ((fetchErr.message || '').includes('waitForChatLoading') && client) {
+                    try { await (client as any).interface.openChatWindow(targetChat.id._serialized); } catch (_) { /* ignorar */ }
                   }
                   await new Promise(r => setTimeout(r, 5000));
                 }
@@ -368,15 +380,24 @@ export async function startBot() {
 async function safeFetchMessages(chat: any, searchOptions: any) {
   try {
     let failures = 0;
-    let messages = [];
+    let messages: any[] = [];
     while (failures < 3) {
       try {
         messages = await chat.fetchMessages(searchOptions);
-        break; 
+        break;
       } catch (e: any) {
+        const isLoadingError = (e.message || '').includes('waitForChatLoading');
         log('WARN', `Intento fallido nativo de recuperación en "${chat.name}" (${failures+1}/3): ${e.message}`);
         failures++;
-        await new Promise(r => setTimeout(r, 2000));
+        if (isLoadingError && client) {
+          // El chat no está inicializado en el store de WA; intentar abrirlo primero
+          try {
+            await (client as any).interface.openChatWindow(chat.id._serialized);
+          } catch (_) { /* ignorar */ }
+          await new Promise(r => setTimeout(r, 5000));
+        } else {
+          await new Promise(r => setTimeout(r, 2000));
+        }
         if (failures >= 3) {
           throw e;
         }
