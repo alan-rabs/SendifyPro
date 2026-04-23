@@ -489,8 +489,9 @@ async function patchWAWebMessageLoader(): Promise<void> {
   }
 }
 
-// Carga mensajes históricos directamente con loadEarlierMsgs (que ya está parchado).
-// Se llama cuando fetchMessages del wwebjs falla o como fallback adicional.
+// Carga mensajes históricos directamente con loadEarlierMsgs.
+// El parche de Proxy se aplica aquí mismo (inline) para garantizar que se aplica
+// en el momento exacto en que el módulo ya está disponible en el contexto de evaluate.
 async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
   if (!client) return [];
   const chatId = chat.id._serialized;
@@ -502,6 +503,79 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 
         const convMsgs = (window as any).Store?.ConversationMsgs;
         if (!convMsgs?.loadEarlierMsgs) return [];
+
+        // ── PARCHE INLINE ──────────────────────────────────────────────────────
+        // Se aplica aquí donde loadEarlierMsgs está confirmado disponible.
+        // Envuelve los argumentos en un Proxy que provee un mock de waitForChatLoading
+        // para que loadEarlierMsgs funcione en modo headless (sin panel de chat abierto).
+        if (!(convMsgs as any).__wwjsPatch) {
+          const origFn = convMsgs.loadEarlierMsgs;
+          const mockState: any = {
+            waitForChatLoading: () => Promise.resolve(),
+            isChatLoaded: true,
+            isLoaded: true,
+          };
+          const STATE_KW = [
+            'loadingstate', 'convstate', 'chatstate', 'loadstate',
+            'chatloading', 'convloading', 'conversationstate', 'panelstate', 'viewstate',
+          ];
+          const BROAD_SKIP = new Set([
+            'then', 'catch', 'finally', 'length', 'constructor',
+            'prototype', '__proto__', 'toString', 'valueOf',
+            'hasOwnProperty', 'isPrototypeOf',
+          ]);
+
+          const makeProxy = (obj: any): any => {
+            if (!obj || typeof obj !== 'object') return obj;
+            return new Proxy(obj, {
+              get(target: any, prop: any, recv: any) {
+                if (typeof prop === 'symbol') return Reflect.get(target, prop, recv);
+                if (prop === 'then' || prop === 'catch' || prop === 'finally') {
+                  return Reflect.get(target, prop, recv);
+                }
+                const val = Reflect.get(target, prop, recv);
+                if (val === undefined && typeof prop === 'string') {
+                  if (STATE_KW.some((k: string) => prop.toLowerCase().includes(k))) return mockState;
+                }
+                return val;
+              },
+            });
+          };
+
+          const makeBroadProxy = (obj: any): any => {
+            if (!obj || typeof obj !== 'object') return obj;
+            return new Proxy(obj, {
+              get(target: any, prop: any, recv: any) {
+                if (typeof prop === 'symbol') return Reflect.get(target, prop, recv);
+                if (BROAD_SKIP.has(prop as string)) return Reflect.get(target, prop, recv);
+                const val = Reflect.get(target, prop, recv);
+                if (val === undefined && typeof prop === 'string' && isNaN(Number(prop))) {
+                  return mockState;
+                }
+                return val;
+              },
+            });
+          };
+
+          convMsgs.loadEarlierMsgs = async function (c: any, m: any) {
+            try {
+              return await origFn.call(this, makeProxy(c), makeProxy(m));
+            } catch (e1: any) {
+              if (!(e1?.message || '').includes('waitForChatLoading')) {
+                if ((e1?.message || '').length > 0) throw e1;
+                return [];
+              }
+            }
+            try {
+              return await origFn.call(this, makeBroadProxy(c), makeBroadProxy(m));
+            } catch (e2: any) {
+              if ((e2?.message || '').includes('waitForChatLoading')) return [];
+              throw e2;
+            }
+          };
+          (convMsgs as any).__wwjsPatch = true;
+        }
+        // ── FIN PARCHE INLINE ──────────────────────────────────────────────────
 
         let msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
 
@@ -515,7 +589,7 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 
           await new Promise(r => setTimeout(r, 300));
           msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
-          if (msgs.length <= prevLen) break; // No hubo nuevos mensajes → fin del historial
+          if (msgs.length <= prevLen) break;
         }
 
         msgs.sort((a: any, b: any) => a.t - b.t);
@@ -540,25 +614,12 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 }
 
 async function safeFetchMessages(chat: any, searchOptions: any) {
-  // Garantiza que el parche esté activo antes de cualquier carga
+  // fetchMessagesFromMemory aplica el parche inline y carga iterativamente.
+  // Es el camino principal porque chat.fetchMessages siempre falla en modo headless
+  // con waitForChatLoading. patchWAWebMessageLoader se mantiene como intento de
+  // parche global anticipado pero no se usa para el flujo principal.
   await patchWAWebMessageLoader();
-  try {
-    // fetchMessages de wwebjs ya usa el loadEarlierMsgs parchado
-    const messages = await chat.fetchMessages(searchOptions);
-    return messages.map((m: any) => {
-      if (m.acceptGroupV4Invite === undefined) m.acceptGroupV4Invite = async () => false;
-      return m;
-    });
-  } catch (e: any) {
-    const isKnown = (e.message || '').includes('waitForChatLoading') ||
-                    (e.message || '').includes('loadEarlierMsgs');
-    if (isKnown) {
-      log('WARN', `fetchMessages falló en "${chat.name}" (${e.message.slice(0, 60)}), usando carga iterativa...`);
-      return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
-    }
-    log('ERROR', `Error inesperado en safeFetchMessages para "${chat.name}": ${e.message}`);
-    throw e;
-  }
+  return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
 }
 
 async function processMessage(msg: any): Promise<boolean> {
