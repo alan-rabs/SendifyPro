@@ -196,6 +196,9 @@ export async function startBot() {
     currentQrCode = null;
     log('INFO', `Escuchando mensajes de ${config.chatConfigs?.length || 0} chats configurados.`);
 
+    // Aplicar parche de carga histórica antes de cualquier recuperación de mensajes
+    await patchWAWebMessageLoader();
+
     try {
       log('INFO', 'Esperando 20 segundos para permitir la sincronización inicial de chats...');
       await new Promise(resolve => setTimeout(resolve, 20000));
@@ -365,79 +368,159 @@ export async function startBot() {
   }
 }
 
-// Abre el chat en la UI de WA Web para inicializar su vista (necesaria para loadEarlierMsgs).
-// Sin esto, waitForChatLoading es undefined y fetchMessages falla.
-async function activateChatInUI(chatId: string): Promise<void> {
-  if (!client) return;
+// ─── CARGA DE MENSAJES HISTÓRICOS ────────────────────────────────────────────
+//
+// DIAGNÓSTICO: wwebjs v1.34 llama a:
+//   window.Store.ConversationMsgs.loadEarlierMsgs(chat, chat.msgs)
+// Internamente, ese módulo de WA Web accede a una propiedad del objeto chat
+// (p.ej. chat.conversationLoadingState) que solo existe cuando el chat está
+// abierto en la UI de React. En modo headless esa propiedad es undefined →
+// crash "Cannot read properties of undefined (reading 'waitForChatLoading')".
+//
+// SOLUCIÓN: Parchear window.Store.ConversationMsgs.loadEarlierMsgs una sola
+// vez al conectarse para envolver los argumentos en un Proxy que devuelve un
+// mock (con waitForChatLoading como no-op) para cualquier propiedad undefined
+// cuyo nombre indique un "estado de carga". Con eso el módulo sigue adelante
+// y carga mensajes reales desde el servidor/caché local de WA Web.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let waWebPatchApplied = false;
+
+async function patchWAWebMessageLoader(): Promise<void> {
+  if (!client || waWebPatchApplied) return;
   try {
-    await client.pupPage.evaluate(async (cId: string) => {
+    const patched = await client.pupPage.evaluate((): boolean => {
       try {
-        // Método principal: Store.Cmd.openChatAt
-        if ((window as any).Store?.Cmd?.openChatAt) {
-          (window as any).Store.Cmd.openChatAt(cId);
-          return;
-        }
-        // Alternativa: chat.open() directo
-        const chatStore = (window as any).Store?.Chat?.get(cId);
-        if (chatStore && typeof chatStore.open === 'function') {
-          await chatStore.open();
-        }
-      } catch (_) {}
-    }, chatId);
-    // Esperar a que la vista se inicialice completamente
-    await new Promise(r => setTimeout(r, 2500));
-  } catch (_) {}
+        const mod = (window as any).require?.('WAWebChatLoadMessages');
+        if (!mod?.loadEarlierMsgs) return false;
+        if ((mod as any).__wwjsPatch) return true;
+
+        const origFn = mod.loadEarlierMsgs;
+
+        // Mock de estado que bypasea waitForChatLoading en modo headless
+        const mockState: any = {
+          waitForChatLoading: () => Promise.resolve(),
+          isChatLoaded: true,
+          isLoaded: true,
+        };
+
+        // Palabras clave que identifican propiedades de estado de carga en WA Web Comet
+        const STATE_KW = [
+          'loadingstate', 'convstate', 'chatstate', 'loadstate',
+          'chatloading', 'convloading', 'conversationstate', 'panelstate', 'viewstate',
+        ];
+
+        const makeProxy = (obj: any): any => {
+          if (!obj || typeof obj !== 'object') return obj;
+          return new Proxy(obj, {
+            get(target: any, prop: any, recv: any) {
+              if (typeof prop === 'symbol') return Reflect.get(target, prop, recv);
+              // No interceptar propiedades de Promise/async (rompería await)
+              if (prop === 'then' || prop === 'catch' || prop === 'finally') {
+                return Reflect.get(target, prop, recv);
+              }
+              const val = Reflect.get(target, prop, recv);
+              if (val === undefined && typeof prop === 'string') {
+                const lc = prop.toLowerCase();
+                if (STATE_KW.some((k: string) => lc.includes(k))) return mockState;
+              }
+              return val;
+            },
+          });
+        };
+
+        // Proxy amplio: intercepta CUALQUIER propiedad undefined (no solo las que
+        // coinciden con palabras clave). Es el fallback cuando el proxy de keywords no basta.
+        // Se excluyen propiedades de Promise y otras especiales para no romper async/await.
+        const BROAD_SKIP = new Set(['then', 'catch', 'finally', 'length', 'constructor',
+                                     'prototype', '__proto__', 'toString', 'valueOf',
+                                     'hasOwnProperty', 'isPrototypeOf']);
+        const makeBroadProxy = (obj: any): any => {
+          if (!obj || typeof obj !== 'object') return obj;
+          return new Proxy(obj, {
+            get(target: any, prop: any, recv: any) {
+              if (typeof prop === 'symbol') return Reflect.get(target, prop, recv);
+              if (BROAD_SKIP.has(prop as string)) return Reflect.get(target, prop, recv);
+              const val = Reflect.get(target, prop, recv);
+              if (val === undefined && typeof prop === 'string' && isNaN(Number(prop))) {
+                return mockState;
+              }
+              return val;
+            },
+          });
+        };
+
+        mod.loadEarlierMsgs = async function (chat: any, msgs: any) {
+          // Intento 1: proxy selectivo (palabras clave de estado)
+          try {
+            return await origFn.call(this, makeProxy(chat), makeProxy(msgs));
+          } catch (e1: any) {
+            if (!(e1?.message || '').includes('waitForChatLoading')) {
+              if ((e1?.message || '').length > 0) throw e1;
+              return [];
+            }
+          }
+          // Intento 2: proxy amplio (intercepta todas las propiedades undefined)
+          try {
+            return await origFn.call(this, makeBroadProxy(chat), makeBroadProxy(msgs));
+          } catch (e2: any) {
+            if ((e2?.message || '').includes('waitForChatLoading')) return [];
+            throw e2;
+          }
+        };
+        (mod as any).__wwjsPatch = true;
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
+
+    if (patched) {
+      waWebPatchApplied = true;
+      log('INFO', 'Parche WAWebChatLoadMessages aplicado — carga de mensajes históricos habilitada.');
+    } else {
+      log('WARN', 'No se pudo aplicar el parche de carga histórica (módulo no encontrado).');
+    }
+  } catch (e: any) {
+    log('WARN', `Error al aplicar parche WAWeb: ${e.message}`);
+  }
 }
 
-// Fallback que abre el chat en la UI y luego usa loadEarlierMsgs iterativamente
-// para cargar mensajes más antiguos hasta alcanzar el límite pedido.
-async function fetchMessagesFromMemory(chat: any, limit: number, alreadyActivated = false): Promise<any[]> {
+// Carga mensajes históricos directamente con loadEarlierMsgs (que ya está parchado).
+// Se llama cuando fetchMessages del wwebjs falla o como fallback adicional.
+async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
   if (!client) return [];
   const chatId = chat.id._serialized;
   try {
-    if (!alreadyActivated) {
-      await activateChatInUI(chatId);
-    }
-
     const rawMsgs = await client.pupPage.evaluate(async (cId: string, lim: number) => {
       try {
         const chatObj = await (window as any).WWebJS.getChat(cId, { getAsModel: false });
-        if (!chatObj || !chatObj.msgs) return [];
+        if (!chatObj?.msgs) return [];
 
-        // Cargar mensajes más antiguos iterativamente ahora que el chat está abierto
-        const MAX_ATTEMPTS = 40;
-        let attempts = 0;
-        while (attempts < MAX_ATTEMPTS) {
-          const currentMsgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
-          if (currentMsgs.length >= lim) break;
-          if (chatObj.msgs.hasOlderMsgs === false) break;
-
-          const prevCount = currentMsgs.length;
-          try {
-            if (typeof chatObj.loadEarlierMsgs === 'function') {
-              await chatObj.loadEarlierMsgs();
-            } else {
-              break;
-            }
-          } catch (_) {
-            break;
-          }
-          await new Promise(r => setTimeout(r, 600));
-
-          const newCount = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification).length;
-          if (newCount <= prevCount) break; // Sin nuevos mensajes, detener
-          attempts++;
-        }
+        const convMsgs = (window as any).Store?.ConversationMsgs;
+        if (!convMsgs?.loadEarlierMsgs) return [];
 
         let msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
-        if (lim > 0 && msgs.length > lim) {
-          msgs.sort((a: any, b: any) => a.t - b.t);
-          msgs = msgs.slice(msgs.length - lim);
+
+        // Carga iterativa: cada llamada retrocede en el tiempo ~20-50 mensajes
+        for (let i = 0; i < 80 && msgs.length < lim; i++) {
+          const prevLen = msgs.length;
+          try {
+            const loaded = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+            if (!loaded || loaded.length === 0) break;
+          } catch (_) { break; }
+
+          await new Promise(r => setTimeout(r, 300));
+          msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
+          if (msgs.length <= prevLen) break; // No hubo nuevos mensajes → fin del historial
         }
-        return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
-      } catch (_) {
-        return [];
-      }
+
+        msgs.sort((a: any, b: any) => a.t - b.t);
+        if (lim > 0 && msgs.length > lim) msgs = msgs.slice(msgs.length - lim);
+        return msgs.map((m: any) => {
+          try { return (window as any).WWebJS.getMessageModel(m); } catch (_) { return null; }
+        }).filter(Boolean);
+      } catch (_) { return []; }
     }, chatId, limit);
 
     return rawMsgs.filter((m: any) => m != null).map((m: any) => {
@@ -454,48 +537,24 @@ async function fetchMessagesFromMemory(chat: any, limit: number, alreadyActivate
 }
 
 async function safeFetchMessages(chat: any, searchOptions: any) {
+  // Garantiza que el parche esté activo antes de cualquier carga
+  await patchWAWebMessageLoader();
   try {
-    // Pre-activar el chat para que loadEarlierMsgs tenga la vista inicializada
-    await activateChatInUI(chat.id._serialized);
-
-    let failures = 0;
-    let messages: any[] = [];
-    while (failures < 3) {
-      try {
-        messages = await chat.fetchMessages(searchOptions);
-        break;
-      } catch (e: any) {
-        const isLoadingError = (e.message || '').includes('waitForChatLoading');
-        log('WARN', `Intento fallido nativo de recuperación en "${chat.name}" (${failures+1}/3): ${e.message}`);
-        failures++;
-        if (failures >= 3) {
-          if (isLoadingError) {
-            log('WARN', `Usando fallback iterativo para "${chat.name}" (cargando con loadEarlierMsgs)`);
-            return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100, true);
-          }
-          throw e;
-        }
-        await new Promise(r => setTimeout(r, 3000));
-      }
+    // fetchMessages de wwebjs ya usa el loadEarlierMsgs parchado
+    const messages = await chat.fetchMessages(searchOptions);
+    return messages.map((m: any) => {
+      if (m.acceptGroupV4Invite === undefined) m.acceptGroupV4Invite = async () => false;
+      return m;
+    });
+  } catch (e: any) {
+    const isKnown = (e.message || '').includes('waitForChatLoading') ||
+                    (e.message || '').includes('loadEarlierMsgs');
+    if (isKnown) {
+      log('WARN', `fetchMessages falló en "${chat.name}" (${e.message.slice(0, 60)}), usando carga iterativa...`);
+      return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
     }
-
-    let parsedMessages;
-    try {
-      parsedMessages = messages.map((m: any) => {
-         if (m.acceptGroupV4Invite === undefined) {
-             m.acceptGroupV4Invite = async () => false;
-         }
-         return m;
-      });
-    } catch(e: any) {
-      log('ERROR', `Error instanciating Message for ${chat.name}: ${e.message}`);
-      parsedMessages = messages;
-    }
-
-    return parsedMessages;
-  } catch (err: any) {
-    log('ERROR', `Error oculto en safeFetchMessages para ${chat.name}: ${err.message || String(err)}`);
-    throw err;
+    log('ERROR', `Error inesperado en safeFetchMessages para "${chat.name}": ${e.message}`);
+    throw e;
   }
 }
 
@@ -836,7 +895,10 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
   const dateMsg = endDate ? `desde ${targetDate} hasta ${endDate}` : `para la fecha: ${targetDate}`;
   log('INFO', `Iniciando barrido de validación ${dateMsg}${targetContact ? ` en el chat: ${targetContact}` : ''}...`);
-  
+
+  // Garantizar que el parche de carga histórica esté activo
+  await patchWAWebMessageLoader();
+
   try {
     log('INFO', 'Obteniendo lista de chats (esto puede demorar unos minutos si hay muchos chats)...');
     const chats = await client.getChats();
