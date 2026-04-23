@@ -215,12 +215,6 @@ export async function startBot() {
 
         if (targetChat) {
           try {
-            // Pre-warm: abrir el chat para inicializar el estado interno de WhatsApp
-            try {
-              await (client as any).interface.openChatWindow(targetChat.id._serialized);
-              await new Promise(r => setTimeout(r, 3000));
-            } catch (_) { /* ignorar errores de pre-warm */ }
-
             let messages = [];
             if (config.initialFetchMode === 'date') {
               const targetDate = new Date(config.initialFetchDate || new Date());
@@ -261,9 +255,6 @@ export async function startBot() {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
                   }
-                  if ((fetchErr.message || '').includes('waitForChatLoading') && client) {
-                    try { await (client as any).interface.openChatWindow(targetChat.id._serialized); } catch (_) { /* ignorar */ }
-                  }
                   await new Promise(r => setTimeout(r, 5000));
                 }
               }
@@ -301,9 +292,6 @@ export async function startBot() {
                   if (consecutiveErrors > 12) {
                      log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
                      break;
-                  }
-                  if ((fetchErr.message || '').includes('waitForChatLoading') && client) {
-                    try { await (client as any).interface.openChatWindow(targetChat.id._serialized); } catch (_) { /* ignorar */ }
                   }
                   await new Promise(r => setTimeout(r, 5000));
                 }
@@ -377,6 +365,40 @@ export async function startBot() {
   }
 }
 
+// Fallback cuando loadEarlierMsgs falla: accede directamente a los mensajes en memoria
+// sin llamar a la API rota de WhatsApp Web.
+async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
+  if (!client) return [];
+  const chatId = chat.id._serialized;
+  try {
+    const rawMsgs = await client.pupPage.evaluate(async (cId: string, lim: number) => {
+      try {
+        const chatObj = await (window as any).WWebJS.getChat(cId, { getAsModel: false });
+        if (!chatObj || !chatObj.msgs) return [];
+        let msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
+        if (lim > 0 && msgs.length > lim) {
+          msgs.sort((a: any, b: any) => a.t - b.t);
+          msgs = msgs.slice(msgs.length - lim);
+        }
+        return msgs.map((m: any) => (window as any).WWebJS.getMessageModel(m));
+      } catch (_) {
+        return [];
+      }
+    }, chatId, limit);
+
+    return rawMsgs.map((m: any) => {
+      const msg = new Message(client, m);
+      if ((msg as any).acceptGroupV4Invite === undefined) {
+        (msg as any).acceptGroupV4Invite = async () => false;
+      }
+      return msg;
+    });
+  } catch (e: any) {
+    log('ERROR', `fetchMessagesFromMemory error para ${chat.name}: ${e.message}`);
+    return [];
+  }
+}
+
 async function safeFetchMessages(chat: any, searchOptions: any) {
   try {
     let failures = 0;
@@ -389,26 +411,22 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
         const isLoadingError = (e.message || '').includes('waitForChatLoading');
         log('WARN', `Intento fallido nativo de recuperación en "${chat.name}" (${failures+1}/3): ${e.message}`);
         failures++;
-        if (isLoadingError && client) {
-          // El chat no está inicializado en el store de WA; intentar abrirlo primero
-          try {
-            await (client as any).interface.openChatWindow(chat.id._serialized);
-          } catch (_) { /* ignorar */ }
-          await new Promise(r => setTimeout(r, 5000));
-        } else {
-          await new Promise(r => setTimeout(r, 2000));
-        }
         if (failures >= 3) {
+          if (isLoadingError) {
+            // loadEarlierMsgs está roto en esta versión de WhatsApp Web.
+            // Fallback: recuperar mensajes directamente desde el store en memoria.
+            log('WARN', `Usando fallback de memoria para "${chat.name}" (loadEarlierMsgs no disponible en esta versión de WA Web)`);
+            return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
+          }
           throw e;
         }
+        await new Promise(r => setTimeout(r, 3000));
       }
     }
-    
+
     let parsedMessages;
     try {
       parsedMessages = messages.map((m: any) => {
-         // Create safe wrapper or return raw model depending on WA Web JS version
-         // chat.fetchMessages natively returns Message objects!
          if (m.acceptGroupV4Invite === undefined) {
              m.acceptGroupV4Invite = async () => false;
          }
