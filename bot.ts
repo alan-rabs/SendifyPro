@@ -365,16 +365,70 @@ export async function startBot() {
   }
 }
 
-// Fallback cuando loadEarlierMsgs falla: accede directamente a los mensajes en memoria
-// sin llamar a la API rota de WhatsApp Web.
-async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
+// Abre el chat en la UI de WA Web para inicializar su vista (necesaria para loadEarlierMsgs).
+// Sin esto, waitForChatLoading es undefined y fetchMessages falla.
+async function activateChatInUI(chatId: string): Promise<void> {
+  if (!client) return;
+  try {
+    await client.pupPage.evaluate(async (cId: string) => {
+      try {
+        // Método principal: Store.Cmd.openChatAt
+        if ((window as any).Store?.Cmd?.openChatAt) {
+          (window as any).Store.Cmd.openChatAt(cId);
+          return;
+        }
+        // Alternativa: chat.open() directo
+        const chatStore = (window as any).Store?.Chat?.get(cId);
+        if (chatStore && typeof chatStore.open === 'function') {
+          await chatStore.open();
+        }
+      } catch (_) {}
+    }, chatId);
+    // Esperar a que la vista se inicialice completamente
+    await new Promise(r => setTimeout(r, 2500));
+  } catch (_) {}
+}
+
+// Fallback que abre el chat en la UI y luego usa loadEarlierMsgs iterativamente
+// para cargar mensajes más antiguos hasta alcanzar el límite pedido.
+async function fetchMessagesFromMemory(chat: any, limit: number, alreadyActivated = false): Promise<any[]> {
   if (!client) return [];
   const chatId = chat.id._serialized;
   try {
+    if (!alreadyActivated) {
+      await activateChatInUI(chatId);
+    }
+
     const rawMsgs = await client.pupPage.evaluate(async (cId: string, lim: number) => {
       try {
         const chatObj = await (window as any).WWebJS.getChat(cId, { getAsModel: false });
         if (!chatObj || !chatObj.msgs) return [];
+
+        // Cargar mensajes más antiguos iterativamente ahora que el chat está abierto
+        const MAX_ATTEMPTS = 40;
+        let attempts = 0;
+        while (attempts < MAX_ATTEMPTS) {
+          const currentMsgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
+          if (currentMsgs.length >= lim) break;
+          if (chatObj.msgs.hasOlderMsgs === false) break;
+
+          const prevCount = currentMsgs.length;
+          try {
+            if (typeof chatObj.loadEarlierMsgs === 'function') {
+              await chatObj.loadEarlierMsgs();
+            } else {
+              break;
+            }
+          } catch (_) {
+            break;
+          }
+          await new Promise(r => setTimeout(r, 600));
+
+          const newCount = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification).length;
+          if (newCount <= prevCount) break; // Sin nuevos mensajes, detener
+          attempts++;
+        }
+
         let msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
         if (lim > 0 && msgs.length > lim) {
           msgs.sort((a: any, b: any) => a.t - b.t);
@@ -386,7 +440,7 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
       }
     }, chatId, limit);
 
-    return rawMsgs.map((m: any) => {
+    return rawMsgs.filter((m: any) => m != null).map((m: any) => {
       const msg = new Message(client, m);
       if ((msg as any).acceptGroupV4Invite === undefined) {
         (msg as any).acceptGroupV4Invite = async () => false;
@@ -401,6 +455,9 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 
 async function safeFetchMessages(chat: any, searchOptions: any) {
   try {
+    // Pre-activar el chat para que loadEarlierMsgs tenga la vista inicializada
+    await activateChatInUI(chat.id._serialized);
+
     let failures = 0;
     let messages: any[] = [];
     while (failures < 3) {
@@ -413,10 +470,8 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
         failures++;
         if (failures >= 3) {
           if (isLoadingError) {
-            // loadEarlierMsgs está roto en esta versión de WhatsApp Web.
-            // Fallback: recuperar mensajes directamente desde el store en memoria.
-            log('WARN', `Usando fallback de memoria para "${chat.name}" (loadEarlierMsgs no disponible en esta versión de WA Web)`);
-            return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
+            log('WARN', `Usando fallback iterativo para "${chat.name}" (cargando con loadEarlierMsgs)`);
+            return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100, true);
           }
           throw e;
         }
