@@ -25,6 +25,7 @@ function getLocalDateStr() {
   return formatter.format(new Date());
 }
 
+
 function getLocalTimestamp() {
   return new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
 }
