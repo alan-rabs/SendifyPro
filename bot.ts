@@ -30,11 +30,11 @@ export function logAudit(phoneNumber: string, actionType: string, nss: string, c
 
   const processingTimestamp = getLocalTimestamp();
   const timestamp = originalTimestamp ? new Date(originalTimestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }) : processingTimestamp;
-  
+
   const isSweep = (global as any).isValidationSweep;
   const messageId = (global as any).sweepMessageId || '';
   const executionType = isSweep ? 'Barrido' : 'Tiempo real';
-  
+
   if (isSweep) {
     if (!(global as any).sweepRecoveredItems) {
       (global as any).sweepRecoveredItems = [];
@@ -77,7 +77,7 @@ const DEFAULT_CONFIG = {
   autoPowerEnabled: true,
   autoPowerOffTime: '00:00',
   autoPowerOnTime: '07:00',
-  
+
   // Chat configs
   chatConfigs: [],
   initialFetchLimit: 50,
@@ -144,7 +144,7 @@ function cleanupOrphanedTempFiles() {
         } catch (e) {}
       }
     }
-    
+
     if (deletedCount > 0) {
       log('INFO', `🧹 Limpieza: Se eliminaron ${deletedCount} archivos temporales huérfanos para liberar espacio.`);
     }
@@ -197,7 +197,7 @@ export async function startBot() {
     try {
       log('INFO', 'Esperando 20 segundos para permitir la sincronización inicial de chats...');
       await new Promise(resolve => setTimeout(resolve, 20000));
-      
+
       log('INFO', `Obteniendo lista de chats para recuperar mensajes pendientes (esto puede demorar)...`);
       const chats = await client.getChats();
       let totalProcessed = 0;
@@ -208,7 +208,7 @@ export async function startBot() {
           log('INFO', `Saltando chat "${chatConf.targetContact}" porque está desactivado.`);
           continue;
         }
-        
+
         const targetChat = chats.find((c: any) => c.name === chatConf.targetContact || c.name === chatConf.targetContact.trim());
 
         if (targetChat) {
@@ -218,9 +218,9 @@ export async function startBot() {
               const targetDate = new Date(config.initialFetchDate || new Date());
               targetDate.setHours(0, 0, 0, 0);
               const targetTimestamp = Math.floor(targetDate.getTime() / 1000);
-              
+
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
-              
+
               let currentLimit = 100;
               let reachedTargetDate = false;
               let consecutiveErrors = 0;
@@ -230,28 +230,28 @@ export async function startBot() {
                 try {
                   const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
                   messages = batch;
-                  
+
                   if (batch.length === 0 || batch.length === lastMessageCount) {
                     break;
                   }
                   lastMessageCount = batch.length;
-                  
+
                   const oldestMsg = batch[0];
                   if (oldestMsg.timestamp <= targetTimestamp) {
                     reachedTargetDate = true;
                   } else {
                     const oldestDate = new Date(oldestMsg.timestamp * 1000).toLocaleDateString();
                     log('INFO', `Mensaje más antiguo hasta ahora: ${oldestDate}. Aumentando búsqueda a ${currentLimit + 200} mensajes...`);
-                    currentLimit += 200; 
-                    await new Promise(resolve => setTimeout(resolve, 1000)); 
+                    currentLimit += 200;
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                   }
                   consecutiveErrors = 0;
                 } catch (fetchErr: any) {
                   consecutiveErrors++;
                   log('WARN', `Intento fallido de recuperación en "${targetChat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
                   if (consecutiveErrors > 12) {
-                     log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
-                     break;
+                    log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
+                    break;
                   }
                   await new Promise(r => setTimeout(r, 5000));
                 }
@@ -262,7 +262,7 @@ export async function startBot() {
             } else {
               const targetLimit = config.initialFetchLimit || 50;
               log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${targetLimit} mensajes...`);
-              
+
               let currentLimit = Math.min(50, targetLimit);
               let consecutiveErrors = 0;
               let lastMessageCount = 0;
@@ -271,16 +271,16 @@ export async function startBot() {
                 try {
                   const batch = await safeFetchMessages(targetChat, { limit: currentLimit });
                   messages = batch;
-                  
+
                   if (batch.length === 0 || batch.length === lastMessageCount || batch.length >= targetLimit) {
                     break;
                   }
                   lastMessageCount = batch.length;
-                  
+
                   if (currentLimit < targetLimit) {
                     log('INFO', `Recuperados ${batch.length} de ${targetLimit} mensajes. Continuando...`);
                   }
-                  
+
                   currentLimit = Math.min(currentLimit + 100, targetLimit);
                   await new Promise(resolve => setTimeout(resolve, 1000));
                   consecutiveErrors = 0;
@@ -288,25 +288,25 @@ export async function startBot() {
                   consecutiveErrors++;
                   log('WARN', `Intento fallido de recuperación en "${targetChat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
                   if (consecutiveErrors > 12) {
-                     log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
-                     break;
+                    log('ERROR', `Demasiados errores al recuperar mensajes en "${targetChat.name}". Abortando recuperación.`);
+                    break;
                   }
                   await new Promise(r => setTimeout(r, 5000));
                 }
               }
             }
-            
+
             let processedCount = 0;
             for (let i = 0; i < messages.length; i++) {
               const msg = messages[i];
               const processed = await processMessage(msg);
               if (processed) processedCount++;
-              
+
               if (i > 0 && i % 500 === 0) {
                 log('INFO', `Progreso de recuperación en "${chatConf.targetContact}": ${i}/${messages.length} mensajes revisados...`);
               }
             }
-            
+
             if (processedCount > 0) {
               log('INFO', `✅ Se recuperaron y procesaron ${processedCount} mensajes/archivos pendientes en "${chatConf.targetContact}".`);
               totalProcessed += processedCount;
@@ -318,7 +318,7 @@ export async function startBot() {
           log('WARN', `No se encontró el chat "${chatConf.targetContact}" en el historial reciente.`);
         }
       }
-      
+
       if (totalProcessed === 0) {
         log('INFO', `No hay mensajes pendientes por procesar en ningún chat.`);
       }
@@ -340,7 +340,7 @@ export async function startBot() {
     log('WARN', `WhatsApp desconectado: ${reason}`);
     botStatus = 'stopped';
     client = null;
-    
+
     // Auto-reconnect after 10 seconds
     log('INFO', 'Intentando reconexión automática en 10 segundos...');
     setTimeout(() => {
@@ -398,13 +398,13 @@ async function patchWAWebMessageLoader(): Promise<void> {
 
         const mockResult: any = { noEarlierMsgs: false };
         const mockState: any = new Proxy(
-          { waitForChatLoading: () => Promise.resolve(mockResult), isChatLoaded: true, isLoaded: true, noEarlierMsgs: false },
-          { get(t: any, p: any, r: any) {
-              if (typeof p === 'symbol') return Reflect.get(t, p, r);
-              if (p === 'then' || p === 'catch' || p === 'finally') return undefined;
-              if (p in t) return t[p];
-              return () => mockResult;
-          }}
+            { waitForChatLoading: () => Promise.resolve(mockResult), isChatLoaded: true, isLoaded: true, noEarlierMsgs: false },
+            { get(t: any, p: any, r: any) {
+                if (typeof p === 'symbol') return Reflect.get(t, p, r);
+                if (p === 'then' || p === 'catch' || p === 'finally') return undefined;
+                if (p in t) return t[p];
+                return () => mockResult;
+              }}
         );
 
         // Palabras clave que identifican propiedades de estado de carga en WA Web Comet
@@ -436,8 +436,8 @@ async function patchWAWebMessageLoader(): Promise<void> {
         // coinciden con palabras clave). Es el fallback cuando el proxy de keywords no basta.
         // Se excluyen propiedades de Promise y otras especiales para no romper async/await.
         const BROAD_SKIP = new Set(['then', 'catch', 'finally', 'length', 'constructor',
-                                     'prototype', '__proto__', 'toString', 'valueOf',
-                                     'hasOwnProperty', 'isPrototypeOf']);
+          'prototype', '__proto__', 'toString', 'valueOf',
+          'hasOwnProperty', 'isPrototypeOf']);
         const makeBroadProxy = (obj: any): any => {
           if (!obj || typeof obj !== 'object') return obj;
           return new Proxy(obj, {
@@ -983,7 +983,7 @@ async function processMessage(msg: any): Promise<boolean> {
   try {
     const chat = await msg.getChat();
     const chatConfig = config.chatConfigs?.find((c: any) => c && c.targetContact && (chat.name === c.targetContact || chat.name === c.targetContact.trim()));
-    
+
     if (!chatConfig) return false;
     if (chatConfig.enabled === false) return false;
 
@@ -1026,7 +1026,7 @@ async function processMessage(msg: any): Promise<boolean> {
         log('INFO', `🔍 Extrayendo texto del PDF...`);
         try {
           const pdfBuffer = Buffer.from(media.data, 'base64');
-          
+
           // Intentar obtener la clase PDFParse de diferentes formas según el entorno
           let ParserClass = PDFParse;
           if (typeof ParserClass !== 'function' && (ParserClass as any)?.PDFParse) {
@@ -1041,7 +1041,7 @@ async function processMessage(msg: any): Promise<boolean> {
             db.incrementStat('processedPdfs');
             const fileName = media.filename || 'PDF sin nombre';
             db.setMetadata('last_processed_file', fileName);
-            
+
             // Update recent files list
             const stats = db.getStats();
             const recent = stats.recentFiles || [];
@@ -1082,7 +1082,7 @@ async function processMessage(msg: any): Promise<boolean> {
       if (rule.type === 'text') {
         const trigger = (rule.triggerValue || '').trim();
         const fullText = textContent.trim();
-        
+
         // 1. Intentar coincidencia GLOBAL primero (mensaje completo)
         let isGlobalMatch = false;
         if (rule.subtype === 'exact') {
@@ -1131,7 +1131,7 @@ async function processMessage(msg: any): Promise<boolean> {
               });
             }
           }
-          
+
           if (matchesToProcess.length > 0) {
             log('DEBUG', `✅ Regla de texto "${rule.name}" coincide en ${matchesToProcess.length} líneas.`);
           }
@@ -1181,7 +1181,7 @@ async function processMessage(msg: any): Promise<boolean> {
 
       if (matchesToProcess.length > 0) {
         log('INFO', `🎯 Regla disparada: "${rule.name}" en chat "${chat.name}" (${matchesToProcess.length} coincidencias)`);
-        
+
         let emailSent = false;
         let waSent = false;
         let processingError = false;
@@ -1206,7 +1206,7 @@ async function processMessage(msg: any): Promise<boolean> {
         // Process Email Action (Una sola vez por regla)
         if (rule.emailEnabled && uniqueEmailBodies.size > 0) {
           const combinedBody = Array.from(uniqueEmailBodies).join('\n\n');
-          
+
           let attachment = null;
           if (msg.hasMedia && media) {
             // Usamos el primer match para el nombre del archivo si tiene placeholders
@@ -1237,7 +1237,7 @@ async function processMessage(msg: any): Promise<boolean> {
         // Process WhatsApp Action (Una sola vez por regla)
         if (rule.waEnabled && uniqueWaBodies.size > 0) {
           const combinedWaMsg = Array.from(uniqueWaBodies).join('\n\n');
-          
+
           let waMedia = null;
           if (msg.hasMedia && media) {
             const firstMatch = matchesToProcess[0];
@@ -1301,10 +1301,10 @@ async function processMessage(msg: any): Promise<boolean> {
 
 function replacePlaceholders(template: string, originalText: string, nss: string, curp: string, ruleName: string) {
   return template
-    .replace(/{original_message}/g, originalText)
-    .replace(/{nss}/g, nss)
-    .replace(/{curp}/g, curp)
-    .replace(/{rule_name}/g, ruleName);
+      .replace(/{original_message}/g, originalText)
+      .replace(/{nss}/g, nss)
+      .replace(/{curp}/g, curp)
+      .replace(/{rule_name}/g, ruleName);
 }
 
 
@@ -1331,7 +1331,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
     const [tYear, tMonth, tDay] = targetDate.split('-').map(Number);
     // Start of the target day
     const startOfDay = new Date(tYear, tMonth - 1, tDay, 0, 0, 0).getTime() / 1000;
-    
+
     // End of the target day (or end date)
     let endOfDay = startOfDay + 86400;
     if (endDate) {
@@ -1354,7 +1354,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
       }
 
       log('INFO', `Revisando historial del chat "${chat.name}" para validación...`);
-      
+
       let messages = [];
       let currentLimit = 100;
       let reachedTargetDate = false;
@@ -1366,12 +1366,12 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
         try {
           const batch = await safeFetchMessages(chat, { limit: currentLimit });
           messages = batch;
-          
+
           if (batch.length === 0 || batch.length === lastMessageCount) {
             break;
           }
           lastMessageCount = batch.length;
-          
+
           const oldestMsg = batch[0];
           if (oldestMsg.timestamp <= startOfDay) {
             reachedTargetDate = true;
@@ -1383,78 +1383,78 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
           }
           consecutiveErrors = 0;
         } catch (fetchErr: any) {
-           consecutiveErrors++;
-           log('WARN', `Intento fallido de barrido en "${chat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
-           if (consecutiveErrors > 12) {
-              log('ERROR', `Demasiados errores al validar chat "${chat.name}". Abortando validación.`);
-              break;
-           }
-           await new Promise(r => setTimeout(r, 5000));
+          consecutiveErrors++;
+          log('WARN', `Intento fallido de barrido en "${chat.name}" (${consecutiveErrors}/12): ${fetchErr.message || String(fetchErr)}`);
+          if (consecutiveErrors > 12) {
+            log('ERROR', `Demasiados errores al validar chat "${chat.name}". Abortando validación.`);
+            break;
+          }
+          await new Promise(r => setTimeout(r, 5000));
         }
       }
-      
+
       for (let i = 0; i < messages.length; i++) {
         const msg = messages[i];
-        
+
         if (i > 0 && i % 500 === 0) {
           log('INFO', `Barrido en "${chat.name}": Analizados ${i}/${messages.length} mensajes...`);
         }
-        
+
         // Only process messages within the target date
         if (msg.timestamp >= startOfDay && msg.timestamp <= endOfDay) {
           totalMessagesChecked++;
-          
+
           // Check direction rules
           const direction = chatConfig.messageDirection || 'both';
           if (direction === 'received' && msg.fromMe) continue;
           if (direction === 'sent' && !msg.fromMe) continue;
 
           const isMarkedProcessed = db.isMessageProcessed(msg.id._serialized);
-          
+
           // We need to re-evaluate the message to see if it SHOULD have been processed
           let shouldBeProcessed = false;
-          
+
           const rules = chatConfig.rules || [];
           if (rules.length > 0) {
-             if (msg.hasMedia) {
-                shouldBeProcessed = true; // Simplified: assume all media in configured chats should be processed
-             } else if (msg.body) {
-                // Check text rules
-                const fullText = msg.body.trim().toLowerCase();
-                const lines = msg.body.split('\n').map(l => l.trim().toLowerCase());
-                
-                for (const rule of rules) {
-                  if (rule.enabled === false) continue;
-                  if (rule.type === 'text') {
-                    const trigger = (rule.triggerValue || '').trim().toLowerCase();
-                    if (!trigger) continue;
+            if (msg.hasMedia) {
+              shouldBeProcessed = true; // Simplified: assume all media in configured chats should be processed
+            } else if (msg.body) {
+              // Check text rules
+              const fullText = msg.body.trim().toLowerCase();
+              const lines = msg.body.split('\n').map(l => l.trim().toLowerCase());
 
-                    if (rule.subtype === 'exact' && fullText === trigger) { shouldBeProcessed = true; break; }
-                    if (rule.subtype === 'contains' && fullText.includes(trigger)) { shouldBeProcessed = true; break; }
-                    if (rule.subtype === 'regex') {
-                      try { const re = new RegExp(trigger, 'i'); if (re.test(fullText)) { shouldBeProcessed = true; break; } } catch(e) {}
-                    }
+              for (const rule of rules) {
+                if (rule.enabled === false) continue;
+                if (rule.type === 'text') {
+                  const trigger = (rule.triggerValue || '').trim().toLowerCase();
+                  if (!trigger) continue;
 
-                    if (!shouldBeProcessed) {
-                      for (const line of lines) {
-                        if (rule.subtype === 'exact' && line === trigger) { shouldBeProcessed = true; break; }
-                        if (rule.subtype === 'contains' && line.includes(trigger)) { shouldBeProcessed = true; break; }
-                        if (rule.subtype === 'regex') {
-                          try { const re = new RegExp(trigger, 'i'); if (re.test(line)) { shouldBeProcessed = true; break; } } catch(e) {}
-                        }
+                  if (rule.subtype === 'exact' && fullText === trigger) { shouldBeProcessed = true; break; }
+                  if (rule.subtype === 'contains' && fullText.includes(trigger)) { shouldBeProcessed = true; break; }
+                  if (rule.subtype === 'regex') {
+                    try { const re = new RegExp(trigger, 'i'); if (re.test(fullText)) { shouldBeProcessed = true; break; } } catch(e) {}
+                  }
+
+                  if (!shouldBeProcessed) {
+                    for (const line of lines) {
+                      if (rule.subtype === 'exact' && line === trigger) { shouldBeProcessed = true; break; }
+                      if (rule.subtype === 'contains' && line.includes(trigger)) { shouldBeProcessed = true; break; }
+                      if (rule.subtype === 'regex') {
+                        try { const re = new RegExp(trigger, 'i'); if (re.test(line)) { shouldBeProcessed = true; break; } } catch(e) {}
                       }
                     }
-                    if (shouldBeProcessed) break;
                   }
+                  if (shouldBeProcessed) break;
                 }
-             }
+              }
+            }
           }
 
           if (shouldBeProcessed && !isMarkedProcessed) {
             // Found a missing message!
             log('WARN', `Barrido: Se encontró un mensaje no procesado en ${chat.name} del ${new Date(msg.timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}`);
             totalMissingFound++;
-            
+
             // Process it now, marking it as a sweep execution
             // We temporarily set a flag to indicate this is a sweep execution
             (global as any).isValidationSweep = true;
@@ -1462,7 +1462,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
             await processMessage(msg);
             (global as any).isValidationSweep = false;
             (global as any).sweepMessageId = null;
-            
+
           } else if (!shouldBeProcessed && isMarkedProcessed) {
             // False positive (marked as processed but shouldn't have been)
             // This is harder to definitively prove without full context, but we log it
@@ -1479,10 +1479,10 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
     (global as any).sweepRecoveredItems = null;
 
     log('INFO', `Barrido de validación completado. Mensajes revisados: ${totalMessagesChecked}, Faltantes procesados: ${totalMissingFound}, Posibles falsos positivos: ${totalFalsePositives}, Correos en cola sin enviar: ${pendingEmails}`);
-    
+
     // Trigger email queue processing immediately
     processEmailQueue();
-    
+
     return {
       success: true,
       message: `Barrido completado. Revisados: ${totalMessagesChecked}, Recuperados: ${totalMissingFound}, En cola: ${pendingEmails}`,
@@ -1524,13 +1524,13 @@ export async function stopBot() {
 }
 
 async function queueOrSendEmail(
-  subject: string, 
-  text: string, 
-  attachment: { filename: string, content: Buffer } | null, 
-  customTargets: string | undefined, 
-  bcc: string | undefined,
-  cc: string | undefined,
-  caseType: string
+    subject: string,
+    text: string,
+    attachment: { filename: string, content: Buffer } | null,
+    customTargets: string | undefined,
+    bcc: string | undefined,
+    cc: string | undefined,
+    caseType: string
 ) {
   if (config.emailBatchingEnabled) {
     // Save attachment to disk temporarily if exists
@@ -1554,7 +1554,7 @@ async function queueOrSendEmail(
       bcc: bcc || '',
       attachment: attachmentInfo
     });
-    
+
     log('INFO', `Correo encolado para agrupación (Caso: ${caseType}).`);
     return true; // Assume success for queueing
   } else {
@@ -1581,7 +1581,7 @@ async function processEmailQueue() {
   for (const key in groups) {
     const items = groups[key];
     const first = items[0];
-    
+
     // Buscar la configuración de la regla
     let ruleConfig: any = null;
     for (const chat of config.chatConfigs || []) {
@@ -1596,34 +1596,34 @@ async function processEmailQueue() {
     let bodyTemplate = ruleConfig?.emailBodyGrouped || 'Se han procesado {count} coincidencias para la regla {rule_name}:\n\n{grouped_content}';
 
     const subject = subjectTemplate
-      .replace(/{count}/g, items.length.toString())
-      .replace(/{rule_name}/g, first.caseType);
-    
+        .replace(/{count}/g, items.length.toString())
+        .replace(/{rule_name}/g, first.caseType);
+
     const uniqueBodies = new Set<string>();
     const attachments: { filename: string, content: Buffer }[] = [];
     const addedAttachmentPaths = new Set<string>();
 
     items.forEach((item) => {
-       if (item.body) {
-         uniqueBodies.add(item.body.trim());
-       }
-       
-       if (item.attachment && fs.existsSync(item.attachment.path)) {
-         if (!addedAttachmentPaths.has(item.attachment.path)) {
-           attachments.push({
-             filename: item.attachment.filename,
-             content: fs.readFileSync(item.attachment.path)
-           });
-           addedAttachmentPaths.add(item.attachment.path);
-         }
-       }
+      if (item.body) {
+        uniqueBodies.add(item.body.trim());
+      }
+
+      if (item.attachment && fs.existsSync(item.attachment.path)) {
+        if (!addedAttachmentPaths.has(item.attachment.path)) {
+          attachments.push({
+            filename: item.attachment.filename,
+            content: fs.readFileSync(item.attachment.path)
+          });
+          addedAttachmentPaths.add(item.attachment.path);
+        }
+      }
     });
 
     const combinedBody = Array.from(uniqueBodies).join('\n\n');
     const finalBody = bodyTemplate
-      .replace(/{count}/g, items.length.toString())
-      .replace(/{rule_name}/g, first.caseType)
-      .replace(/{grouped_content}/g, combinedBody);
+        .replace(/{count}/g, items.length.toString())
+        .replace(/{rule_name}/g, first.caseType)
+        .replace(/{grouped_content}/g, combinedBody);
 
     const sent = await sendEmail(subject, finalBody, attachments.length > 0 ? attachments : null, first.to, first.bcc, first.cc, true, first.caseType);
     if (sent) {
@@ -1645,7 +1645,7 @@ async function processEmailQueue() {
     const key = `${item.to}_${item.cc}_${item.bcc}_${item.caseType}`;
     if (successfullySentKeys.includes(key)) {
       if (item.attachment && item.attachment.path && fs.existsSync(item.attachment.path)) {
-         try { fs.unlinkSync(item.attachment.path); } catch (e) {}
+        try { fs.unlinkSync(item.attachment.path); } catch (e) {}
       }
       db.removeFromEmailQueue(item.id);
     }
@@ -1655,10 +1655,10 @@ async function processEmailQueue() {
 let lastScheduleRun = '';
 setInterval(() => {
   if (!config.emailBatchingEnabled) return;
-  
+
   const now = new Date();
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-  
+
   const schedules = config.emailSchedules || [];
   const limit = config.emailBatchLimit || 20;
 
@@ -1752,18 +1752,18 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
     }
 
     await transporter.sendMail(mailOptions);
-    
+
     // Clear last error if successful
     db.setMetadata('last_email_error', '');
-    
+
     // Increment total emails sent
     db.incrementStat('emailsSent');
-    
+
     // Increment daily counter for ALL emails sent (batch or individual)
     db.incrementEmailSentToday();
     // Re-fetch config to get the updated value
     config = db.getConfig() || config;
-    
+
     // Add to recent emails
     db.addRecentEmail({
       time: new Date().toISOString(),
@@ -1771,9 +1771,9 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
       attachments: attachments ? attachments.length : 0,
       rule: ruleName
     });
-    
+
     log('INFO', `✅ Correo enviado exitosamente a ${targets.join(', ')}. (${config.emailsSentToday}/${limit} hoy)`);
-    
+
     return true;
   } catch (err: any) {
     const errorMsg = `Error SMTP: ${err.message}`;
@@ -1790,7 +1790,7 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
 
 async function sendToWhatsAppChats(targetNamesStr: string, message: string, media: any = null) {
   if (!client || !targetNamesStr) return false;
-  
+
   const targetNames = targetNamesStr.split(',').map(n => n.trim()).filter(n => n);
   if (targetNames.length === 0) {
     log('ERROR', 'No hay chats destino válidos configurados para reenvío.');
@@ -1800,7 +1800,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
   try {
     const chats = await client.getChats();
     let sentCount = 0;
-    
+
     for (const name of targetNames) {
       const chat = chats.find((c: any) => c.name === name || c.name === name.trim());
       if (chat) {
@@ -1817,7 +1817,7 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
         log('WARN', `❌ Chat destino no encontrado para reenvío: "${name}"`);
       }
     }
-    
+
     return sentCount > 0;
   } catch (err: any) {
     log('ERROR', `Error al reenviar mensaje por WhatsApp: ${err.message}`);
@@ -1906,12 +1906,12 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
 
         // Parse as local time, not UTC
         logDate = new Date(
-          parseInt(dateParts[2]), 
-          parseInt(dateParts[1]) - 1, 
-          parseInt(dateParts[0]),
-          hours,
-          parts[1] ? parseInt(parts[1].split(':')[1]) : 0,
-          parts[1] ? parseInt(parts[1].split(':')[2]) : 0
+            parseInt(dateParts[2]),
+            parseInt(dateParts[1]) - 1,
+            parseInt(dateParts[0]),
+            hours,
+            parts[1] ? parseInt(parts[1].split(':')[1]) : 0,
+            parts[1] ? parseInt(parts[1].split(':')[2]) : 0
         );
       } else {
         logDate = new Date(log.timestamp);
@@ -1919,7 +1919,7 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
     } catch (e) {
       logDate = new Date(log.timestamp);
     }
-    
+
     if (isNaN(logDate.getTime())) return false;
     return logDate >= start && logDate <= end;
   });
@@ -1930,9 +1930,9 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
     return columns.map(col => {
       let val = '';
       const colLower = col.toLowerCase();
-      
+
       const timestampParts = (log.timestamp || '').split(', ');
-      
+
       if (colLower === 'date' || colLower === 'timestamp' || colLower === 'fecha') val = timestampParts[0] || '';
       else if (colLower === 'time' || colLower === 'hora') val = timestampParts[1] || '';
       else if (colLower === 'contact' || colLower === 'conversacion' || colLower === 'conversación') val = log.phone_number || '';
@@ -1948,7 +1948,7 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
         }
       }
       else if (colLower === 'execution_type' || colLower === 'ejecucion' || colLower === 'ejecución') val = log.execution_type || 'Tiempo real';
-      
+
       return val;
     });
   };
@@ -1956,17 +1956,17 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
   if (splitByRule) {
     const wb = XLSX.utils.book_new();
     const rulesPresent = Array.from(new Set(filteredLogs.map((l: any) => l.action_type)));
-    
+
     rulesPresent.forEach((ruleName: string) => {
       const ruleLogs = filteredLogs.filter((l: any) => l.action_type === ruleName);
       const rows = ruleLogs.map(mapLogToRow);
       // Add header row
       rows.unshift(columns);
       const ws = XLSX.utils.aoa_to_sheet(rows);
-      
+
       let safeSheetName = ruleName.replace(/[\\/?*\[\]]/g, '').substring(0, 31);
       if (!safeSheetName) safeSheetName = 'Sheet';
-      
+
       XLSX.utils.book_append_sheet(wb, ws, safeSheetName);
     });
 
@@ -2003,7 +2003,7 @@ setInterval(async () => {
   if (config.auditActionEmailEnabled && config.auditEmailTargets && emailSchedule === timeStr && (global as any).lastAuditRunGlobalEmail !== `${dateStr}_${timeStr}`) {
     (global as any).lastAuditRunGlobalEmail = `${dateStr}_${timeStr}`;
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global Email)...');
-    
+
     const columns = ['Timestamp', 'Hora', 'Conversacion', 'Regla', 'NSS', 'CURP', 'Mensaje', 'Status', 'Ejecución'];
     const csvResult = generateCustomCsvFromDb(columns);
 
@@ -2024,7 +2024,7 @@ setInterval(async () => {
   if (config.auditActionWaEnabled && config.auditWaTargets && waSchedule === timeStr && (global as any).lastAuditRunGlobalWa !== `${dateStr}_${timeStr}`) {
     (global as any).lastAuditRunGlobalWa = `${dateStr}_${timeStr}`;
     log('INFO', 'Iniciando tarea programada: Envío de reporte de auditoría diario (Global WhatsApp)...');
-    
+
     const columns = ['Timestamp', 'Hora', 'Conversacion', 'Regla', 'NSS', 'CURP', 'Mensaje', 'Status', 'Ejecución'];
     const csvResult = generateCustomCsvFromDb(columns);
 
@@ -2045,7 +2045,7 @@ setInterval(async () => {
   if (config.auditTemplates) {
     config.auditTemplates.forEach(async (template: any) => {
       if (template.schedule === timeStr && (global as any).lastAuditRun !== `${template.id}_${dateStr}_${timeStr}`) {
-        
+
         const freq = template.frequency || 'daily';
         let shouldRun = false;
         const dayOfWeek = now.getDay();
@@ -2062,9 +2062,9 @@ setInterval(async () => {
         if (!shouldRun) return;
 
         (global as any).lastAuditRun = `${template.id}_${dateStr}_${timeStr}`;
-        
+
         log('INFO', `Iniciando tarea programada para plantilla: "${template.name}"`);
-        
+
         const csvResult = generateCustomCsvFromDb(template.columns, template.timeRange || 'today', template.rules, template.splitByRule);
         if (!csvResult) {
           log('INFO', `No hay datos para la plantilla "${template.name}" en el rango de tiempo especificado.`);
@@ -2074,12 +2074,12 @@ setInterval(async () => {
         const fileBuffer = Buffer.isBuffer(csvResult.content) ? csvResult.content : Buffer.from(csvResult.content);
         const fileExtension = csvResult.isXlsx ? 'xlsx' : 'csv';
         const mimeType = csvResult.isXlsx ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv';
-        
+
         const replaceVars = (str: string) => {
           return str
-            .replace(/{count}/g, csvResult.count.toString())
-            .replace(/{date}/g, dateStr)
-            .replace(/{template_name}/g, template.name);
+              .replace(/{count}/g, csvResult.count.toString())
+              .replace(/{date}/g, dateStr)
+              .replace(/{template_name}/g, template.name);
         };
 
         const emailSubject = template.emailSubject ? replaceVars(template.emailSubject) : `Reporte: ${template.name} - ${dateStr}`;
@@ -2120,7 +2120,7 @@ setInterval(async () => {
       if (shouldRunSweep) {
         (global as any).lastValidationSweep = sweepKey;
         log('INFO', `Iniciando tarea programada: Barrido de Validación (${freq})...`);
-        
+
         let targetDate = new Date().toISOString().split('T')[0];
         let endDate: string | undefined = undefined;
 
@@ -2135,10 +2135,10 @@ setInterval(async () => {
           targetDate = lastMonth.toISOString().split('T')[0];
           endDate = new Date().toISOString().split('T')[0];
         }
-        
+
         try {
           const result = await runValidationSweep(targetDate, undefined, endDate);
-          
+
           if (config.validationSweepEmailTargets) {
             const subject = `Reporte de Barrido de Validación - ${dateStr}`;
             let text = `El barrido de validación automático (${freq}) ha finalizado.\n\n`;
@@ -2147,7 +2147,7 @@ setInterval(async () => {
             text += `- Faltantes recuperados y procesados: ${result.stats?.recovered || 0}\n`;
             text += `- Posibles falsos positivos: ${result.stats?.falsePositives || 0}\n`;
             text += `- Correos en cola sin enviar: ${result.stats?.pendingEmails || 0}\n\n`;
-            
+
             if (result.stats?.recoveredItems && result.stats.recoveredItems.length > 0) {
               text += `Detalle de elementos recuperados:\n`;
               result.stats.recoveredItems.forEach((item: any, i: number) => {
@@ -2157,7 +2157,7 @@ setInterval(async () => {
             }
 
             text += `Los elementos recuperados han sido procesados y registrados en la auditoría con el tipo de ejecución "Barrido".`;
-            
+
             await sendEmail(subject, text, null, config.validationSweepEmailTargets);
           }
         } catch (err: any) {
@@ -2174,7 +2174,7 @@ setInterval(async () => {
       log('INFO', 'Hora de apagado automático alcanzada. Deteniendo el bot...');
       stopBot();
     }
-    
+
     if (config.autoPowerOnTime === timeStr && (global as any).lastPowerAction !== `on_${dateStr}_${timeStr}`) {
       (global as any).lastPowerAction = `on_${dateStr}_${timeStr}`;
       log('INFO', 'Hora de encendido automático alcanzada. Iniciando el bot...');
