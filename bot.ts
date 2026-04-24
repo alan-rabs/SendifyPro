@@ -525,11 +525,14 @@ async function patchWAWebMessageLoader(): Promise<void> {
 async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
   if (!client) return [];
   const chatId = chat.id._serialized;
+  const chatName = chat.name || chat.formattedTitle || '';
 
   const code = `(async function() {
     try {
       var chatObj = await window.WWebJS.getChat(${JSON.stringify(chatId)}, { getAsModel: false });
       if (!chatObj || !chatObj.msgs) return { msgs: [], diag: 'no_chat', diagnostics: null };
+
+      var chatNameForDom = ${JSON.stringify(chatName)};
 
       // También obtener el chat "real" de WA Web (sin envoltorio de wwebjs).
       // openChatAt y otros métodos internos necesitan ESTE objeto, no el wrapper.
@@ -638,6 +641,161 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 
       // Resetear flag para forzar consulta al servidor
       if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
+
+      // ══════════════════════════════════════════════════════════════════════
+      // ESTRATEGIA 0 (NUEVA, PRIORITARIA): DOM CLICK + SCROLL SIMULADO
+      // ══════════════════════════════════════════════════════════════════════
+      // En WA Web moderno, los métodos internos (loadEarlierMsgs, etc.) NO
+      // funcionan por sí solos porque WA Web solo inicializa ciertos contextos
+      // (webcBrowserNetworkType, UI observers, msgLoadState, etc.) cuando el
+      // usuario realmente hace click en un chat. Este approach simula ese click
+      // usando el DOM, igual que lo haría un humano.
+      try {
+        diagnostics.strategiesUsed.push('domClick');
+        diagnostics.domClickStatus = {};
+
+        // Paso 1: Buscar el elemento del chat en la lista lateral
+        // WA Web usa lista virtualizada, así que el chat puede NO estar en el DOM
+        // si no es de los más recientes. Intentamos varios selectores defensivos.
+        var chatEl = null;
+        var searchAttempts = 0;
+
+        function findChatElement() {
+          // Estrategia A: buscar por atributo title exacto
+          var candidates = document.querySelectorAll('span[title], div[title]');
+          for (var i = 0; i < candidates.length; i++) {
+            var titleAttr = candidates[i].getAttribute('title');
+            if (titleAttr && (titleAttr === chatNameForDom || titleAttr.toUpperCase() === chatNameForDom.toUpperCase())) {
+              // Subir en el DOM para encontrar el contenedor clickeable
+              var node = candidates[i];
+              for (var up = 0; up < 15 && node; up++) {
+                var role = node.getAttribute && node.getAttribute('role');
+                var testid = node.getAttribute && node.getAttribute('data-testid');
+                if (role === 'listitem' || role === 'row' || role === 'gridcell' ||
+                    testid === 'cell-frame-container' || testid === 'chat') {
+                  return node;
+                }
+                node = node.parentElement;
+              }
+              // Si no encontramos un contenedor especial, usar el clickeable más cercano
+              var clickable = candidates[i].closest('div[tabindex], div[role]');
+              return clickable || candidates[i];
+            }
+          }
+          return null;
+        }
+
+        chatEl = findChatElement();
+
+        // Si no está visible, hacer scroll en la lista de chats para buscarlo
+        if (!chatEl) {
+          diagnostics.domClickStatus.initialFind = 'not_in_dom';
+          var chatList = document.querySelector('[role="grid"]') ||
+                         document.querySelector('[aria-label*="hat"]') ||
+                         document.querySelector('#pane-side') ||
+                         document.querySelector('[data-tab="3"]');
+          if (chatList) {
+            for (var sc = 0; sc < 15 && !chatEl; sc++) {
+              chatList.scrollTop = chatList.scrollTop + 500;
+              await new Promise(function(r) { setTimeout(r, 400); });
+              chatEl = findChatElement();
+              searchAttempts++;
+            }
+          }
+        }
+
+        diagnostics.domClickStatus.chatFound = !!chatEl;
+        diagnostics.domClickStatus.searchAttempts = searchAttempts;
+
+        if (chatEl) {
+          // Paso 2: Simular click real con eventos de mouse (más realista que .click())
+          var rect = chatEl.getBoundingClientRect();
+          var cx = rect.left + rect.width / 2;
+          var cy = rect.top + rect.height / 2;
+
+          var evOpts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 };
+          try {
+            chatEl.dispatchEvent(new MouseEvent('mouseover', evOpts));
+            chatEl.dispatchEvent(new MouseEvent('mousedown', evOpts));
+            chatEl.dispatchEvent(new MouseEvent('mouseup', evOpts));
+            chatEl.dispatchEvent(new MouseEvent('click', evOpts));
+            diagnostics.domClickStatus.clickDispatched = true;
+          } catch(e) {
+            diagnostics.domClickStatus.clickError = (e && e.message) || String(e);
+            // Fallback: .click() directo
+            try { chatEl.click(); diagnostics.domClickStatus.clickDispatched = 'fallback'; } catch(_) {}
+          }
+
+          // Paso 3: Esperar a que WA Web abra el chat y cargue mensajes iniciales
+          await new Promise(function(r) { setTimeout(r, 3500); });
+
+          var afterClickCount = chatObj.msgs.getModelsArray().length;
+          diagnostics.domClickStatus.afterClickCount = afterClickCount;
+          addMsgs(chatObj.msgs.getModelsArray());
+
+          // Paso 4: Simular scroll hacia arriba en el panel de mensajes
+          // para forzar carga de históricos (exactamente lo que hace el usuario)
+          var msgPane = document.querySelector('[data-testid="conversation-panel-messages"]') ||
+                        document.querySelector('[role="application"] [tabindex="0"]') ||
+                        document.querySelector('#main [role="region"]') ||
+                        document.querySelector('#main .copyable-area');
+
+          diagnostics.domClickStatus.msgPaneFound = !!msgPane;
+
+          if (msgPane) {
+            var scrollEmptyStreak = 0;
+            var lastCount = afterClickCount;
+            for (var sc2 = 0; sc2 < 40 && Object.keys(msgMap).length < lim; sc2++) {
+              diagnostics.iterations++;
+              // Scroll al tope para disparar la carga de mensajes antiguos
+              msgPane.scrollTop = 0;
+              msgPane.dispatchEvent(new Event('scroll', { bubbles: true }));
+              await new Promise(function(r) { setTimeout(r, 700); });
+
+              // Recoger mensajes que hayan entrado en la colección
+              var beforeScroll = Object.keys(msgMap).length;
+              addMsgs(chatObj.msgs.getModelsArray());
+              var afterScroll = Object.keys(msgMap).length;
+              var currentModelCount = chatObj.msgs.getModelsArray().length;
+
+              if (sc2 < 5) {
+                diagnostics.perIterFirst5.push({
+                  iter: 'dom_' + sc2,
+                  loadedRet: currentModelCount - lastCount,
+                  addedFromLoaded: 0,
+                  addedFromCollection: afterScroll - beforeScroll,
+                  totalBefore: beforeScroll,
+                  totalAfter: afterScroll,
+                  noEarlierFlag: !!(chatObj.msgs && chatObj.msgs.noEarlierMsgs),
+                  error: null
+                });
+              }
+
+              if (currentModelCount === lastCount) {
+                scrollEmptyStreak++;
+                if (scrollEmptyStreak >= 4) {
+                  // Sin progreso en 4 scrolls → probablemente ya no hay más
+                  break;
+                }
+              } else {
+                scrollEmptyStreak = 0;
+              }
+              lastCount = currentModelCount;
+            }
+
+            // Recoger lo que quede en la colección
+            addMsgs(chatObj.msgs.getModelsArray());
+          }
+
+          diagnostics.domClickStatus.finalCount = Object.keys(msgMap).length;
+        } else {
+          // Si no encontramos el chat, registrar para diagnóstico
+          diagnostics.domClickStatus.chatNotFound = true;
+          diagnostics.domClickStatus.bodyTextSnip = document.body && document.body.innerText ? document.body.innerText.slice(0, 200) : '';
+        }
+      } catch(domErr) {
+        diagnostics.errorsInLoop.push({ iter: 'dom_err', error: (domErr && domErr.message) || String(domErr) });
+      }
 
       // ─── ESTRATEGIA 1: loadEarlierMsgs del módulo (parcheado) ────────────
       if (moduleOk) {
@@ -1141,6 +1299,9 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         }
         if (d.chatMethods) {
           log(level, `[DIAG ${chat.name}] chatMethods=${JSON.stringify(d.chatMethods).slice(0, 500)}`);
+        }
+        if (d.domClickStatus) {
+          log(level, `[DIAG ${chat.name}] domClick=${JSON.stringify(d.domClickStatus).slice(0, 600)}`);
         }
         if (d.msgsMethods) {
           log(level, `[DIAG ${chat.name}] msgsMethods=${JSON.stringify(d.msgsMethods).slice(0, 600)}`);
