@@ -764,6 +764,51 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         }
       } catch(_) {}
 
+      // ─── DIAGNÓSTICO AMPLIO: exponer API completa de WA Web ──────────────
+      // Necesitamos saber qué métodos están REALMENTE disponibles en esta versión
+      // de WA Web para poder disparar la carga de mensajes históricos.
+      try {
+        function getMethodsOf(obj, max) {
+          var methods = [];
+          if (!obj) return methods;
+          try {
+            var own = Object.getOwnPropertyNames(obj);
+            for (var i = 0; i < own.length && methods.length < max; i++) {
+              var n = own[i];
+              try { if (typeof obj[n] === 'function') methods.push(n); } catch(_) {}
+            }
+          } catch(_) {}
+          try {
+            var proto = Object.getPrototypeOf(obj);
+            if (proto && proto !== Object.prototype) {
+              var protoNames = Object.getOwnPropertyNames(proto);
+              for (var j = 0; j < protoNames.length && methods.length < max; j++) {
+                var nm = protoNames[j];
+                if (nm === 'constructor' || methods.indexOf(nm) !== -1) continue;
+                try { if (typeof obj[nm] === 'function') methods.push(nm); } catch(_) {}
+              }
+            }
+          } catch(_) {}
+          return methods;
+        }
+
+        diagnostics.chatMethods = getMethodsOf(chatObj, 30);
+        diagnostics.msgsMethods = getMethodsOf(chatObj.msgs, 40);
+
+        if (window.Store) {
+          diagnostics.storeKeys = Object.keys(window.Store).filter(function(k) {
+            var v = window.Store[k];
+            return v && (k.indexOf('Chat') !== -1 || k.indexOf('Msg') !== -1 || k.indexOf('Load') !== -1 || k.indexOf('History') !== -1 || k.indexOf('Conv') !== -1);
+          }).slice(0, 30);
+
+          if (window.Store.Cmd) {
+            diagnostics.cmdMethods = getMethodsOf(window.Store.Cmd, 40).filter(function(m) {
+              return m.indexOf('pen') !== -1 || m.indexOf('hat') !== -1 || m.indexOf('oad') !== -1 || m.indexOf('ocus') !== -1 || m.indexOf('ub') !== -1 || m.indexOf('et') === 0;
+            });
+          }
+        }
+      } catch(_) {}
+
       // ─── ESTRATEGIA 4: Observer hack (fix clave para WA Web moderno) ─────
       // WA Web moderno solo carga mensajes cuando hay observadores de UI
       // (msgLoadState._uiObservers > 0). Si nadie observa, loadEarlierMsgs retorna []
@@ -945,6 +990,18 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         log(level, `[DIAG ${chat.name}] collKeys=${JSON.stringify((d.msgCollectionKeys || []).slice(0, 10))}`);
         if (d.mlsMethods || d.mlsKeys) {
           log(level, `[DIAG ${chat.name}] mlsMethods=${JSON.stringify(d.mlsMethods || [])} mlsKeys=${JSON.stringify(d.mlsKeys || [])} mlsState=${JSON.stringify(d.mlsState || {}).slice(0, 300)}`);
+        }
+        if (d.chatMethods) {
+          log(level, `[DIAG ${chat.name}] chatMethods=${JSON.stringify(d.chatMethods).slice(0, 500)}`);
+        }
+        if (d.msgsMethods) {
+          log(level, `[DIAG ${chat.name}] msgsMethods=${JSON.stringify(d.msgsMethods).slice(0, 600)}`);
+        }
+        if (d.storeKeys) {
+          log(level, `[DIAG ${chat.name}] storeKeys=${JSON.stringify(d.storeKeys).slice(0, 500)}`);
+        }
+        if (d.cmdMethods) {
+          log(level, `[DIAG ${chat.name}] cmdMethods=${JSON.stringify(d.cmdMethods).slice(0, 500)}`);
         }
         if (d.perIterFirst5 && d.perIterFirst5.length) {
           for (const it of d.perIterFirst5) {
