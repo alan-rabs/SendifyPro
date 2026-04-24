@@ -400,7 +400,10 @@ export async function startBot() {
     });
 
     client.on('message_create', async (msg: any) => {
-        await processMessage(msg);
+        // Encolar en lugar de procesar directamente. Esto garantiza serialización:
+        // si llegan múltiples mensajes simultáneos (ej: 5 PDFs en segundos), se
+        // procesan de uno en uno con reintentos automáticos en caso de fallo.
+        enqueueMessage(msg);
     });
 
     try {
@@ -837,6 +840,158 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
     return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
 }
 
+// ─── SISTEMA DE COLA SERIALIZADA PARA MENSAJES EN VIVO ──────────────────────
+// Objetivo: garantizar que TODOS los mensajes se procesen correctamente, uno a
+// la vez, con reintentos automáticos en caso de fallo. Prioriza exhaustividad
+// sobre velocidad (el usuario prefiere que procese todo aunque tarde más).
+//
+// Problemas que resuelve:
+//   1. Race conditions: múltiples mensajes simultáneos competían por recursos
+//   2. Descargas de PDF que fallaban sin reintentarse
+//   3. Extracciones de texto que fallaban por PDFs grandes/corruptos
+//   4. Doble procesamiento del mismo mensaje (dedupe insuficiente)
+
+interface QueueItem {
+    msg: any;
+    retries: number;
+    enqueuedAt: number;
+}
+
+const messageQueue: QueueItem[] = [];
+const inProgressIds = new Set<string>(); // Dedupe en memoria (además del DB)
+let isProcessingQueue = false;
+const MAX_QUEUE_RETRIES = 3;
+const QUEUE_RETRY_DELAYS = [2000, 5000, 10000]; // Backoff exponencial
+
+function enqueueMessage(msg: any): void {
+    try {
+        const msgId = msg?.id?._serialized;
+        if (!msgId) return;
+
+        // Dedupe: no encolar si ya está procesado o en proceso
+        if (db.isMessageProcessed(msgId)) return;
+        if (inProgressIds.has(msgId)) return;
+        if (messageQueue.some(item => item.msg?.id?._serialized === msgId)) return;
+
+        messageQueue.push({ msg, retries: 0, enqueuedAt: Date.now() });
+
+        if (messageQueue.length > 1) {
+            log('INFO', `📥 Mensaje encolado. Cola actual: ${messageQueue.length} pendientes.`);
+        }
+
+        // Disparar el procesador si no está corriendo
+        if (!isProcessingQueue) {
+            processMessageQueue().catch(err => {
+                log('ERROR', `Error fatal en procesador de cola: ${err.message}`);
+                isProcessingQueue = false;
+            });
+        }
+    } catch (e: any) {
+        log('ERROR', `Error encolando mensaje: ${e.message}`);
+    }
+}
+
+async function processMessageQueue(): Promise<void> {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    try {
+        while (messageQueue.length > 0) {
+            const item = messageQueue[0];
+            const msgId = item.msg?.id?._serialized || 'unknown';
+            inProgressIds.add(msgId);
+
+            let success = false;
+            try {
+                success = await processMessage(item.msg);
+            } catch (err: any) {
+                log('ERROR', `Error procesando mensaje ${msgId}: ${err.message}`);
+            }
+
+            // Si el mensaje fue marcado como procesado en DB, considerarlo exitoso
+            // (processMessage marca en DB solo si no hubo error interno crítico)
+            const markedInDb = db.isMessageProcessed(msgId);
+
+            if (success || markedInDb) {
+                // Completado: quitar de la cola
+                messageQueue.shift();
+                inProgressIds.delete(msgId);
+                if (messageQueue.length > 0) {
+                    log('DEBUG', `✅ Mensaje ${msgId.slice(-20)} procesado. Quedan ${messageQueue.length} en cola.`);
+                }
+            } else {
+                // No exitoso: aplicar retry con backoff
+                item.retries++;
+                if (item.retries >= MAX_QUEUE_RETRIES) {
+                    log('ERROR', `❌ Mensaje abandonado tras ${MAX_QUEUE_RETRIES} intentos: ${msgId.slice(-20)}. Quedará pendiente para el próximo arranque.`);
+                    messageQueue.shift();
+                    inProgressIds.delete(msgId);
+                } else {
+                    const delay = QUEUE_RETRY_DELAYS[item.retries - 1] || 15000;
+                    log('WARN', `⚠️ Mensaje ${msgId.slice(-20)} falló. Reintento ${item.retries}/${MAX_QUEUE_RETRIES} en ${delay}ms...`);
+                    inProgressIds.delete(msgId); // Liberarlo temporalmente
+                    await new Promise(r => setTimeout(r, delay));
+                }
+            }
+        }
+    } finally {
+        isProcessingQueue = false;
+    }
+}
+
+// ─── HELPERS CON REINTENTOS ─────────────────────────────────────────────────
+
+// Descarga media con reintentos automáticos. Maneja errores de red, timeouts, etc.
+async function downloadMediaWithRetry(msg: any, maxAttempts: number = 3): Promise<any> {
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const media = await msg.downloadMedia();
+            if (media) return media;
+            log('WARN', `Descarga retornó null (intento ${attempt}/${maxAttempts}). ${attempt < maxAttempts ? 'Reintentando...' : ''}`);
+        } catch (e: any) {
+            lastError = e;
+            log('WARN', `Error en descarga (intento ${attempt}/${maxAttempts}): ${e.message}. ${attempt < maxAttempts ? 'Reintentando...' : ''}`);
+        }
+        if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1500 * attempt)); // Backoff: 1.5s, 3s, 4.5s
+        }
+    }
+    if (lastError) throw lastError;
+    return null;
+}
+
+// Extrae texto de PDF con reintentos. Algunos PDFs fallan en el primer intento
+// por temas de buffer/memoria, pero funcionan en el segundo.
+async function extractPdfTextWithRetry(pdfBuffer: Buffer, maxAttempts: number = 3): Promise<string> {
+    let lastError: any = null;
+    let ParserClass = PDFParse;
+    if (typeof ParserClass !== 'function' && (ParserClass as any)?.PDFParse) {
+        ParserClass = (ParserClass as any).PDFParse;
+    }
+    if (typeof ParserClass !== 'function') {
+        throw new Error(`PDFParse no disponible (tipo: ${typeof ParserClass})`);
+    }
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const parser = new (ParserClass as any)({ data: pdfBuffer });
+            const pdfData = await parser.getText();
+            const text = pdfData.text || '';
+            if (text.length > 0 || attempt === maxAttempts) return text;
+            log('WARN', `PDF extraído sin texto (intento ${attempt}/${maxAttempts}). Reintentando...`);
+        } catch (e: any) {
+            lastError = e;
+            log('WARN', `Error extrayendo PDF (intento ${attempt}/${maxAttempts}): ${e.message}. ${attempt < maxAttempts ? 'Reintentando...' : ''}`);
+        }
+        if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 1500 * attempt));
+        }
+    }
+    if (lastError) throw lastError;
+    return '';
+}
+
 async function processMessage(msg: any): Promise<boolean> {
     try {
         const chat = await msg.getChat();
@@ -868,15 +1023,15 @@ async function processMessage(msg: any): Promise<boolean> {
         if (msg.hasMedia) {
             log('INFO', `📄 Archivo detectado en "${chat.name}". Iniciando descarga...`);
             try {
-                media = await msg.downloadMedia();
+                media = await downloadMediaWithRetry(msg, 3);
                 if (!media) {
-                    log('ERROR', `❌ No se pudo descargar el archivo del mensaje.`);
+                    log('ERROR', `❌ No se pudo descargar el archivo tras 3 intentos.`);
                     processingError = true;
                 } else {
                     log('INFO', `✅ Archivo descargado: ${media.filename || 'sin_nombre'} (${media.mimetype})`);
                 }
             } catch (e) {
-                log('ERROR', `❌ Error descargando media: ${e instanceof Error ? e.message : String(e)}`);
+                log('ERROR', `❌ Error descargando media tras reintentos: ${e instanceof Error ? e.message : String(e)}`);
                 processingError = true;
             }
 
@@ -884,33 +1039,19 @@ async function processMessage(msg: any): Promise<boolean> {
                 log('INFO', `🔍 Extrayendo texto del PDF...`);
                 try {
                     const pdfBuffer = Buffer.from(media.data, 'base64');
+                    textContent = await extractPdfTextWithRetry(pdfBuffer, 3);
+                    log('INFO', `✅ Texto extraído correctamente (${textContent.length} caracteres).`);
+                    db.incrementStat('processedPdfs');
+                    const fileName = media.filename || 'PDF sin nombre';
+                    db.setMetadata('last_processed_file', fileName);
 
-                    // Intentar obtener la clase PDFParse de diferentes formas según el entorno
-                    let ParserClass = PDFParse;
-                    if (typeof ParserClass !== 'function' && (ParserClass as any)?.PDFParse) {
-                        ParserClass = (ParserClass as any).PDFParse;
-                    }
-
-                    if (typeof ParserClass === 'function') {
-                        const parser = new (ParserClass as any)({ data: pdfBuffer });
-                        const pdfData = await parser.getText();
-                        textContent = pdfData.text || '';
-                        log('INFO', `✅ Texto extraído correctamente (${textContent.length} caracteres).`);
-                        db.incrementStat('processedPdfs');
-                        const fileName = media.filename || 'PDF sin nombre';
-                        db.setMetadata('last_processed_file', fileName);
-
-                        // Update recent files list
-                        const stats = db.getStats();
-                        const recent = stats.recentFiles || [];
-                        const updatedRecent = [fileName, ...recent.filter((f: string) => f !== fileName)].slice(0, 5);
-                        db.setMetadata('recent_processed_files', JSON.stringify(updatedRecent));
-                    } else {
-                        log('ERROR', `❌ No se pudo encontrar la clase PDFParse (tipo: ${typeof ParserClass}).`);
-                        processingError = true;
-                    }
+                    // Update recent files list
+                    const stats = db.getStats();
+                    const recent = stats.recentFiles || [];
+                    const updatedRecent = [fileName, ...recent.filter((f: string) => f !== fileName)].slice(0, 5);
+                    db.setMetadata('recent_processed_files', JSON.stringify(updatedRecent));
                 } catch (e) {
-                    log('ERROR', `❌ Error al extraer texto de PDF: ${e instanceof Error ? e.message : String(e)}`);
+                    log('ERROR', `❌ Error al extraer texto de PDF tras reintentos: ${e instanceof Error ? e.message : String(e)}`);
                     processingError = true;
                 }
             }
