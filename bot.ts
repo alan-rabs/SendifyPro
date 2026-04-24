@@ -903,28 +903,40 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         }
       }
 
-      // ─── ESTRATEGIA 5: Activación UI (fallback si incObservers no existe) ─
+      // ─── ESTRATEGIA 5: Activación UI (ahora con captura real de errores) ─
       if (Object.keys(msgMap).length < lim && window.Store && window.Store.Cmd) {
         diagnostics.strategiesUsed.push('ui');
         var prevActive = null;
         try { prevActive = (window.Store.Cmd.activeChat) || null; } catch(_) {}
 
         var opened = false;
-        try {
-          if (typeof window.Store.Cmd.openChatAt === 'function') {
-            try { await window.Store.Cmd.openChatAt(chatObj, { collapseLabel: 'latest' }); opened = true; }
-            catch(_) {
-              try { await window.Store.Cmd.openChatAt(chatObj); opened = true; } catch(_) {}
-            }
+        var uiOpenErrors = [];
+
+        // openChatAt con varias firmas posibles
+        if (typeof window.Store.Cmd.openChatAt === 'function') {
+          var attempts = [
+            { args: [chatObj, { collapseLabel: 'latest' }], label: 'openChatAt(chat,{collapseLabel})' },
+            { args: [chatObj], label: 'openChatAt(chat)' },
+            { args: [chatObj, 'unread'], label: 'openChatAt(chat,unread)' },
+            { args: [{ chatId: chatObj.id }], label: 'openChatAt({chatId})' }
+          ];
+          for (var a = 0; a < attempts.length && !opened; a++) {
+            try { await window.Store.Cmd.openChatAt.apply(window.Store.Cmd, attempts[a].args); opened = true; }
+            catch(e) { uiOpenErrors.push(attempts[a].label + ': ' + ((e && e.message) || String(e)).slice(0, 100)); }
           }
-          if (!opened && typeof window.Store.Cmd.openChatBottom === 'function') {
-            try { await window.Store.Cmd.openChatBottom(chatObj); opened = true; } catch(_) {}
-          }
-          if (!opened && typeof window.Store.Cmd.openChat === 'function') {
-            try { await window.Store.Cmd.openChat(chatObj); opened = true; } catch(_) {}
-          }
-        } catch(e) {
-          diagnostics.errorsInLoop.push({ iter: 'ui_open', error: (e && e.message) || String(e) });
+        }
+        // Fallbacks
+        if (!opened && typeof window.Store.Cmd.openChatBottom === 'function') {
+          try { await window.Store.Cmd.openChatBottom(chatObj); opened = true; }
+          catch(e) { uiOpenErrors.push('openChatBottom: ' + ((e && e.message) || String(e)).slice(0, 100)); }
+        }
+        if (!opened && typeof window.Store.Cmd.openChatFromUnread === 'function') {
+          try { await window.Store.Cmd.openChatFromUnread(chatObj); opened = true; }
+          catch(e) { uiOpenErrors.push('openChatFromUnread: ' + ((e && e.message) || String(e)).slice(0, 100)); }
+        }
+
+        if (uiOpenErrors.length) {
+          diagnostics.errorsInLoop.push({ iter: 'ui_open_errs', error: uiOpenErrors.join(' | ') });
         }
         diagnostics.uiOpened = opened;
 
@@ -964,12 +976,77 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
             if (prevActive && prevActive !== chatObj) {
               if (typeof window.Store.Cmd.openChatAt === 'function') {
                 await window.Store.Cmd.openChatAt(prevActive);
-              } else if (typeof window.Store.Cmd.openChat === 'function') {
-                await window.Store.Cmd.openChat(prevActive);
               }
             }
           } catch(_) {}
         }
+      }
+
+      // ─── ESTRATEGIA 6: loadMsgsPromiseLoop (¡EL MÉTODO CORRECTO!) ────────
+      // Descubierto en el diagnóstico: ConversationMsgs.loadMsgsPromiseLoop es el método
+      // que carga mensajes en bucle dinámicamente (el "scroll simulado" que recordaba
+      // el usuario que funcionaba antes). Es distinto de loadEarlierMsgs.
+      if (Object.keys(msgMap).length < lim && convMsgs && typeof convMsgs.loadMsgsPromiseLoop === 'function') {
+        diagnostics.strategiesUsed.push('promiseLoop');
+
+        // Subir observers para asegurar que WA Web procese la petición
+        var mlsPL = chatObj.msgs && chatObj.msgs.msgLoadState;
+        var incUsedPL = false;
+        try {
+          if (mlsPL && typeof mlsPL.incObservers === 'function') {
+            mlsPL.incObservers();
+            incUsedPL = true;
+          }
+        } catch(_) {}
+
+        // Probar diferentes firmas (no conocemos la exacta)
+        var plAttempts = [
+          { args: [chatObj], label: 'loadMsgsPromiseLoop(chat)' },
+          { args: [chatObj, chatObj.msgs], label: 'loadMsgsPromiseLoop(chat, msgs)' },
+          { args: [chatObj, 50], label: 'loadMsgsPromiseLoop(chat, 50)' },
+          { args: [chatObj, chatObj.msgs, 50], label: 'loadMsgsPromiseLoop(chat, msgs, 50)' }
+        ];
+
+        var plSucceeded = false;
+        var plLoopRunning = false;
+
+        for (var pa = 0; pa < plAttempts.length && !plSucceeded && Object.keys(msgMap).length < lim; pa++) {
+          try {
+            if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
+            var plResult = await convMsgs.loadMsgsPromiseLoop.apply(convMsgs, plAttempts[pa].args);
+            diagnostics.errorsInLoop.push({ iter: 'pl_ok', error: plAttempts[pa].label + ' OK result=' + (plResult === undefined ? 'undefined' : (typeof plResult)) });
+            plSucceeded = true;
+
+            // Dar tiempo a que el loop de promesas cargue
+            for (var w = 0; w < 10 && Object.keys(msgMap).length < lim; w++) {
+              await new Promise(function(r) { setTimeout(r, 800); });
+              var prevPL = Object.keys(msgMap).length;
+              addMsgs(chatObj.msgs.getModelsArray());
+              var gainedPL = Object.keys(msgMap).length - prevPL;
+
+              if (w < 3) {
+                diagnostics.perIterFirst5.push({
+                  iter: 'pl_wait_' + w,
+                  loadedRet: -1,
+                  addedFromLoaded: 0,
+                  addedFromCollection: gainedPL,
+                  totalBefore: prevPL,
+                  totalAfter: Object.keys(msgMap).length,
+                  noEarlierFlag: !!(chatObj.msgs && chatObj.msgs.noEarlierMsgs),
+                  error: null
+                });
+              }
+
+              // Si dejaron de agregar por 2 iteraciones, salir
+              if (gainedPL === 0 && w > 1) break;
+            }
+          } catch(e) {
+            diagnostics.errorsInLoop.push({ iter: 'pl_' + pa, error: plAttempts[pa].label + ': ' + ((e && e.message) || String(e)).slice(0, 100) });
+          }
+        }
+
+        // Bajar observers
+        try { if (incUsedPL && typeof mlsPL.decObservers === 'function') mlsPL.decObservers(); } catch(_) {}
       }
 
       // Ordenar por timestamp y limitar
