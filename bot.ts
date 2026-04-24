@@ -348,8 +348,8 @@ export async function startBot() {
                         let processedCount = 0;
                         for (let i = 0; i < messages.length; i++) {
                             const msg = messages[i];
-                            const processed = await processMessage(msg);
-                            if (processed) processedCount++;
+                            const result = await processMessage(msg);
+                            if (result.didMatch) processedCount++;
 
                             if (i > 0 && i % 500 === 0) {
                                 log('INFO', `Progreso de recuperación en "${chatConf.targetContact}": ${i}/${messages.length} mensajes revisados...`);
@@ -901,26 +901,23 @@ async function processMessageQueue(): Promise<void> {
             const msgId = item.msg?.id?._serialized || 'unknown';
             inProgressIds.add(msgId);
 
-            let success = false;
+            let result: ProcessResult = { didMatch: false, shouldRetry: false };
             try {
-                success = await processMessage(item.msg);
+                result = await processMessage(item.msg);
             } catch (err: any) {
                 log('ERROR', `Error procesando mensaje ${msgId}: ${err.message}`);
+                result = { didMatch: false, shouldRetry: true };
             }
 
-            // Si el mensaje fue marcado como procesado en DB, considerarlo exitoso
-            // (processMessage marca en DB solo si no hubo error interno crítico)
-            const markedInDb = db.isMessageProcessed(msgId);
-
-            if (success || markedInDb) {
-                // Completado: quitar de la cola
+            if (!result.shouldRetry) {
+                // Completado correctamente (con o sin match) - quitar de la cola
                 messageQueue.shift();
                 inProgressIds.delete(msgId);
-                if (messageQueue.length > 0) {
-                    log('DEBUG', `✅ Mensaje ${msgId.slice(-20)} procesado. Quedan ${messageQueue.length} en cola.`);
+                if (messageQueue.length > 0 && messageQueue.length % 5 === 0) {
+                    log('DEBUG', `✅ Cola: ${messageQueue.length} pendientes restantes.`);
                 }
             } else {
-                // No exitoso: aplicar retry con backoff
+                // Error real - aplicar retry con backoff
                 item.retries++;
                 if (item.retries >= MAX_QUEUE_RETRIES) {
                     log('ERROR', `❌ Mensaje abandonado tras ${MAX_QUEUE_RETRIES} intentos: ${msgId.slice(-20)}. Quedará pendiente para el próximo arranque.`);
@@ -929,7 +926,7 @@ async function processMessageQueue(): Promise<void> {
                 } else {
                     const delay = QUEUE_RETRY_DELAYS[item.retries - 1] || 15000;
                     log('WARN', `⚠️ Mensaje ${msgId.slice(-20)} falló. Reintento ${item.retries}/${MAX_QUEUE_RETRIES} en ${delay}ms...`);
-                    inProgressIds.delete(msgId); // Liberarlo temporalmente
+                    inProgressIds.delete(msgId);
                     await new Promise(r => setTimeout(r, delay));
                 }
             }
@@ -992,26 +989,35 @@ async function extractPdfTextWithRetry(pdfBuffer: Buffer, maxAttempts: number = 
     return '';
 }
 
-async function processMessage(msg: any): Promise<boolean> {
+// Resultado del procesamiento de un mensaje.
+// - didMatch: true si el mensaje disparó alguna regla (para contadores)
+// - shouldRetry: true solo si hubo error real recuperable (para la cola de retries)
+interface ProcessResult {
+    didMatch: boolean;
+    shouldRetry: boolean;
+}
+
+async function processMessage(msg: any): Promise<ProcessResult> {
     try {
         const chat = await msg.getChat();
         const chatConfig = config.chatConfigs?.find((c: any) => c && c.targetContact && (chat.name === c.targetContact || chat.name === c.targetContact.trim()));
 
-        if (!chatConfig) return false;
-        if (chatConfig.enabled === false) return false;
+        // Skips legítimos (no son errores, no deben reintentarse)
+        if (!chatConfig) return { didMatch: false, shouldRetry: false };
+        if (chatConfig.enabled === false) return { didMatch: false, shouldRetry: false };
 
         const direction = chatConfig.messageDirection || 'both';
-        if (direction === 'received' && msg.fromMe) return false;
-        if (direction === 'sent' && !msg.fromMe) return false;
+        if (direction === 'received' && msg.fromMe) return { didMatch: false, shouldRetry: false };
+        if (direction === 'sent' && !msg.fromMe) return { didMatch: false, shouldRetry: false };
 
-        if (db.isMessageProcessed(msg.id._serialized)) return false;
+        if (db.isMessageProcessed(msg.id._serialized)) return { didMatch: false, shouldRetry: false };
 
         log('DEBUG', `Mensaje en "${chat.name}": tipo=${msg.type}, body="${msg.body.substring(0, 50)}${msg.body.length > 50 ? '...' : ''}"`);
 
         const rules = chatConfig.rules || [];
         if (rules.length === 0) {
             db.markMessageProcessed(msg.id._serialized);
-            return false;
+            return { didMatch: false, shouldRetry: false };
         }
 
         let didProcessSomething = false;
@@ -1287,14 +1293,15 @@ async function processMessage(msg: any): Promise<boolean> {
 
         if (!processingError) {
             db.markMessageProcessed(msg.id._serialized);
+            return { didMatch: didProcessSomething, shouldRetry: false };
         } else {
-            log('WARN', `Mensaje ${msg.id._serialized} no marcado como procesado debido a errores. Se reintentará en el próximo inicio.`);
+            log('WARN', `Mensaje ${msg.id._serialized} tuvo errores. Quedará para reintento.`);
+            return { didMatch: didProcessSomething, shouldRetry: true };
         }
-        return didProcessSomething;
 
     } catch (err: any) {
         log('ERROR', `Error procesando mensaje: ${err.message}`);
-        return false;
+        return { didMatch: false, shouldRetry: true };
     }
 }
 
