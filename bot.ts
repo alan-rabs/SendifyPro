@@ -380,6 +380,7 @@ export async function startBot() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let waWebPatchApplied = false;
+let waWebPatchWarnLogged = false;
 
 async function patchWAWebMessageLoader(): Promise<void> {
   if (!client || waWebPatchApplied) return;
@@ -480,17 +481,27 @@ async function patchWAWebMessageLoader(): Promise<void> {
     if (patched) {
       waWebPatchApplied = true;
       log('INFO', 'Parche WAWebChatLoadMessages aplicado — carga de mensajes históricos habilitada.');
-    } else {
-      log('WARN', 'No se pudo aplicar el parche de carga histórica (módulo no encontrado).');
+    } else if (!waWebPatchWarnLogged) {
+      log('WARN', 'No se pudo aplicar el parche de carga histórica (módulo aún no disponible). Se reintentará automáticamente en la primera carga de mensajes.');
+      waWebPatchWarnLogged = true;
     }
   } catch (e: any) {
-    log('WARN', `Error al aplicar parche WAWeb: ${e.message}`);
+    if (!waWebPatchWarnLogged) {
+      log('WARN', `Error al aplicar parche WAWeb: ${e.message}`);
+      waWebPatchWarnLogged = true;
+    }
   }
 }
 
 // Carga mensajes históricos con loadEarlierMsgs parchado inline.
 // IMPORTANTE: el código se pasa como STRING a pupPage.evaluate para evitar que
 // esbuild/tsx inyecte helpers como __name() que no existen en el contexto del browser.
+//
+// CAMBIO CLAVE vs versión anterior: se acumulan los mensajes DIRECTAMENTE del valor
+// retornado por loadEarlierMsgs (mediante un Map por id) en vez de depender de que
+// WA Web los agregue automáticamente a chatObj.msgs. En versiones recientes de WA Web
+// la colección puede no actualizarse cuando el chat no está abierto en UI, aunque
+// el servidor sí devuelva los mensajes. Esto arregla el caso "parche OK, 1 mensajes cargados".
 async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
   if (!client) return [];
   const chatId = chat.id._serialized;
@@ -498,7 +509,7 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
   const code = `(async function() {
     try {
       var chatObj = await window.WWebJS.getChat(${JSON.stringify(chatId)}, { getAsModel: false });
-      if (!chatObj || !chatObj.msgs) return { msgs: [], diag: 'no_chat' };
+      if (!chatObj || !chatObj.msgs) return { msgs: [], diag: 'no_chat', diagnostics: null };
 
       var convMsgs = (window.Store && window.Store.ConversationMsgs) || null;
       if (!convMsgs || !convMsgs.loadEarlierMsgs) {
@@ -508,8 +519,6 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 
       if (moduleOk && !convMsgs.__wwjsPatch) {
         var origFn = convMsgs.loadEarlierMsgs;
-        // waitForChatLoading debe resolver con un objeto que tenga noEarlierMsgs:false,
-        // porque loadEarlierMsgs usa el resultado: const r = await state.waitForChatLoading(); if(r.noEarlierMsgs)...
         var mockResult = { noEarlierMsgs: false };
         var mockState = new Proxy(
           { waitForChatLoading: function() { return Promise.resolve(mockResult); }, isChatLoaded: true, isLoaded: true, noEarlierMsgs: false },
@@ -557,43 +566,185 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
       }
 
       var lim = ${JSON.stringify(limit)};
-      // Resetear noEarlierMsgs para que WA Web consulte al servidor aunque el caché esté vacío
-      if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
-      var msgs = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
 
+      // Detectar qué cargadores están disponibles
+      var availableLoaders = [];
+      if (moduleOk) availableLoaders.push('module');
+      if (chatObj.msgs && typeof chatObj.msgs.loadEarlierMsgs === 'function') availableLoaders.push('collection');
+      if (typeof chatObj.loadEarlierMsgs === 'function') availableLoaders.push('chat');
+
+      // Acumular mensajes por id (dedup) — MERGE directo del retorno de loadEarlierMsgs
+      var msgMap = {};
+      function addMsgs(arr) {
+        if (!arr || !arr.length) return 0;
+        var added = 0;
+        for (var i = 0; i < arr.length; i++) {
+          var m = arr[i];
+          if (!m || m.isNotification) continue;
+          var id = m.id && (m.id._serialized || m.id.id || String(m.id));
+          var key = id ? String(id) : ('idx_' + i + '_' + (m.t || Math.random()));
+          if (!msgMap[key]) {
+            msgMap[key] = m;
+            added++;
+          }
+        }
+        return added;
+      }
+
+      // Semilla: lo que ya está en caché local
+      var initialArr = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
+      addMsgs(initialArr);
+
+      var diagnostics = {
+        initialCount: initialArr.length,
+        availableLoaders: availableLoaders,
+        strategiesUsed: [],
+        iterations: 0,
+        emptyIterations: 0,
+        errorsInLoop: [],
+        perIterFirst5: [],
+        noEarlierMsgsAtStart: !!chatObj.msgs.noEarlierMsgs,
+        msgCollectionKeys: Object.keys(chatObj.msgs || {}).slice(0, 20)
+      };
+
+      // Resetear flag para forzar consulta al servidor
+      if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
+
+      // ─── ESTRATEGIA 1: loadEarlierMsgs del módulo (parcheado) ────────────
       if (moduleOk) {
+        diagnostics.strategiesUsed.push('module');
         var emptyStreak = 0;
-        for (var i = 0; i < 80 && msgs.length < lim; i++) {
-          var prevLen = msgs.length;
-          chatObj.msgs.noEarlierMsgs = false; // Forzar consulta al servidor en cada iteración
+        for (var i = 0; i < 80 && Object.keys(msgMap).length < lim; i++) {
+          diagnostics.iterations++;
+          chatObj.msgs.noEarlierMsgs = false;
+          var prevTotal = Object.keys(msgMap).length;
+          var loadedCount = 0;
+          var addedFromLoaded = 0;
+          var addedFromCollection = 0;
+          var errMsg = null;
+          var loaded = null;
           try {
-            var loaded = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-            if (!loaded || loaded.length === 0) {
-              emptyStreak++;
-              if (emptyStreak >= 3) break; // 3 respuestas vacías consecutivas = no hay más
-              await new Promise(function(r) { setTimeout(r, 800); });
-              continue;
-            }
-            emptyStreak = 0;
-          } catch(e) { break; }
-          await new Promise(function(r) { setTimeout(r, 400); });
-          msgs = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
-          if (msgs.length <= prevLen) {
+            loaded = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+            loadedCount = (loaded && loaded.length) || 0;
+          } catch(e) {
+            errMsg = (e && e.message) || String(e);
+            diagnostics.errorsInLoop.push({ iter: i, error: errMsg });
+          }
+
+          addedFromLoaded = addMsgs(loaded);
+          // También intentamos recoger cualquier cosa que WA Web pudo agregar a la colección
+          addedFromCollection = addMsgs(chatObj.msgs.getModelsArray());
+
+          var totalNow = Object.keys(msgMap).length;
+          if (i < 5) {
+            diagnostics.perIterFirst5.push({
+              iter: i,
+              loadedRet: loadedCount,
+              addedFromLoaded: addedFromLoaded,
+              addedFromCollection: addedFromCollection,
+              totalBefore: prevTotal,
+              totalAfter: totalNow,
+              noEarlierFlag: !!chatObj.msgs.noEarlierMsgs,
+              error: errMsg
+            });
+          }
+
+          if (errMsg) break;
+
+          var gained = totalNow - prevTotal;
+          if (gained === 0) {
             emptyStreak++;
-            if (emptyStreak >= 3) break;
+            diagnostics.emptyIterations++;
+            if (emptyStreak >= 5) break;
+            await new Promise(function(r) { setTimeout(r, 800); });
+          } else {
+            emptyStreak = 0;
+            await new Promise(function(r) { setTimeout(r, 400); });
           }
         }
       }
 
-      msgs.sort(function(a,b) { return a.t - b.t; });
-      if (lim > 0 && msgs.length > lim) msgs = msgs.slice(msgs.length - lim);
-      var serialized = msgs.map(function(m) {
+      // ─── ESTRATEGIA 2: método en la colección (si el módulo no trajo nada) ──
+      if (Object.keys(msgMap).length < lim && chatObj.msgs && typeof chatObj.msgs.loadEarlierMsgs === 'function') {
+        diagnostics.strategiesUsed.push('collection');
+        var emptyStreak2 = 0;
+        for (var j = 0; j < 40 && Object.keys(msgMap).length < lim; j++) {
+          diagnostics.iterations++;
+          chatObj.msgs.noEarlierMsgs = false;
+          var prevTotal2 = Object.keys(msgMap).length;
+          var errMsg2 = null;
+          var loaded2 = null;
+          try {
+            loaded2 = await chatObj.msgs.loadEarlierMsgs();
+          } catch(e) {
+            errMsg2 = (e && e.message) || String(e);
+            diagnostics.errorsInLoop.push({ iter: 'col_' + j, error: errMsg2 });
+          }
+          addMsgs(loaded2);
+          addMsgs(chatObj.msgs.getModelsArray());
+
+          if (errMsg2) break;
+          var gained2 = Object.keys(msgMap).length - prevTotal2;
+          if (gained2 === 0) {
+            emptyStreak2++;
+            if (emptyStreak2 >= 5) break;
+            await new Promise(function(r) { setTimeout(r, 800); });
+          } else {
+            emptyStreak2 = 0;
+            await new Promise(function(r) { setTimeout(r, 400); });
+          }
+        }
+      }
+
+      // ─── ESTRATEGIA 3: método a nivel del chat (último recurso) ──────────
+      // Algunas versiones de WA Web exponen loadEarlierMsgs directamente en el chat,
+      // no en el módulo ni en la colección. Se intenta si las anteriores fallaron.
+      if (Object.keys(msgMap).length < lim && typeof chatObj.loadEarlierMsgs === 'function') {
+        diagnostics.strategiesUsed.push('chat');
+        var emptyStreak3 = 0;
+        for (var k2 = 0; k2 < 40 && Object.keys(msgMap).length < lim; k2++) {
+          diagnostics.iterations++;
+          chatObj.msgs.noEarlierMsgs = false;
+          var prevTotal3 = Object.keys(msgMap).length;
+          var errMsg3 = null;
+          var loaded3 = null;
+          try {
+            loaded3 = await chatObj.loadEarlierMsgs();
+          } catch(e) {
+            errMsg3 = (e && e.message) || String(e);
+            diagnostics.errorsInLoop.push({ iter: 'chat_' + k2, error: errMsg3 });
+          }
+          addMsgs(loaded3);
+          addMsgs(chatObj.msgs.getModelsArray());
+
+          if (errMsg3) break;
+          var gained3 = Object.keys(msgMap).length - prevTotal3;
+          if (gained3 === 0) {
+            emptyStreak3++;
+            if (emptyStreak3 >= 5) break;
+            await new Promise(function(r) { setTimeout(r, 800); });
+          } else {
+            emptyStreak3 = 0;
+            await new Promise(function(r) { setTimeout(r, 400); });
+          }
+        }
+      }
+
+      // Ordenar por timestamp y limitar
+      var allMsgs = [];
+      for (var k in msgMap) { if (msgMap.hasOwnProperty(k)) allMsgs.push(msgMap[k]); }
+      allMsgs.sort(function(a,b) { return (a.t || 0) - (b.t || 0); });
+      if (lim > 0 && allMsgs.length > lim) allMsgs = allMsgs.slice(allMsgs.length - lim);
+
+      var serialized = allMsgs.map(function(m) {
         try { return window.WWebJS.getMessageModel(m); } catch(e) { return null; }
       }).filter(Boolean);
 
-      return { msgs: serialized, diag: moduleOk ? 'ok' : 'no_module' };
+      diagnostics.finalCount = serialized.length;
+
+      return { msgs: serialized, diag: moduleOk ? 'ok' : 'no_module', diagnostics: diagnostics };
     } catch(e) {
-      return { msgs: [], diag: 'inner_error:' + (e && e.message ? e.message : '?') };
+      return { msgs: [], diag: 'inner_error:' + (e && e.message ? e.message : '?'), diagnostics: null };
     }
   })()`;
 
@@ -604,6 +755,26 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
       log('WARN', `fetchMessagesFromMemory "${chat.name}": ${result.diag} — ${result.msgs.length} msgs de memoria local`);
     } else {
       log('INFO', `fetchMessagesFromMemory "${chat.name}": parche OK, ${result.msgs.length} mensajes cargados`);
+    }
+
+    // Log detallado de diagnóstico la primera vez por chat (siempre, incluso en éxito).
+    // Esto nos da visibilidad del pipeline completo aunque la carga funcione.
+    if (result.diagnostics) {
+      const d = result.diagnostics;
+      if (!(global as any).__diagLoggedFor) (global as any).__diagLoggedFor = {};
+      if (!(global as any).__diagLoggedFor[chat.name]) {
+        (global as any).__diagLoggedFor[chat.name] = true;
+        const level = result.msgs.length < 2 && limit > 2 ? 'WARN' : 'INFO';
+        log(level, `[DIAG ${chat.name}] iniCache=${d.initialCount} loaders=[${(d.availableLoaders || []).join(',')}] estrategias=[${(d.strategiesUsed || []).join(',')}] iters=${d.iterations} vacías=${d.emptyIterations} final=${d.finalCount} collKeys=${JSON.stringify((d.msgCollectionKeys || []).slice(0, 10))}`);
+        if (d.perIterFirst5 && d.perIterFirst5.length) {
+          for (const it of d.perIterFirst5) {
+            log(level, `[DIAG ${chat.name}] iter=${it.iter} loadedRet=${it.loadedRet} +loaded=${it.addedFromLoaded} +coll=${it.addedFromCollection} total=${it.totalBefore}->${it.totalAfter} noEarlier=${it.noEarlierFlag}${it.error ? ' ERR='+it.error : ''}`);
+          }
+        }
+        if (d.errorsInLoop && d.errorsInLoop.length) {
+          log('WARN', `[DIAG ${chat.name}] errores: ${JSON.stringify(d.errorsInLoop).slice(0, 400)}`);
+        }
+      }
     }
 
     return (result.msgs as any[]).filter(Boolean).map((m: any) => {
