@@ -249,11 +249,20 @@ export async function startBot() {
                     try {
                         let messages = [];
                         if (config.initialFetchMode === 'date') {
-                            const targetDate = new Date(config.initialFetchDate || new Date());
+                            // FIX zona horaria: parsear la fecha como LOCAL, no UTC.
+                            // new Date("2026-04-23") se parsea como UTC midnight, que en México (UTC-6)
+                            // se convierte en el día anterior 18:00 local. Luego setHours(0,0,0,0) retrocede
+                            // un día más y terminamos filtrando desde el día anterior al solicitado.
+                            // Solución: construir la fecha con los componentes year/month/day en hora local.
+                            const dateStr = config.initialFetchDate || new Date().toISOString().split('T')[0];
+                            const parts = String(dateStr).split('-');
+                            const targetDate = parts.length === 3
+                                ? new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0)
+                                : new Date(dateStr);
                             targetDate.setHours(0, 0, 0, 0);
                             const targetTimestamp = Math.floor(targetDate.getTime() / 1000);
 
-                            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleDateString()}...`);
+                            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })} (timestamp ${targetTimestamp})...`);
 
                             let currentLimit = 100;
                             let reachedTargetDate = false;
@@ -292,7 +301,13 @@ export async function startBot() {
                             }
 
                             messages = messages.filter((m: any) => m.timestamp >= targetTimestamp);
-                            log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada.`);
+                            if (messages.length > 0) {
+                                const oldest = new Date(messages[0].timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+                                const newest = new Date(messages[messages.length - 1].timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+                                log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada (rango: ${oldest} → ${newest}).`);
+                            } else {
+                                log('INFO', `Se encontraron 0 mensajes desde la fecha especificada.`);
+                            }
                         } else {
                             const targetLimit = config.initialFetchLimit || 50;
                             log('INFO', `Chat "${chatConf.targetContact}" encontrado. Revisando los últimos ${targetLimit} mensajes...`);
