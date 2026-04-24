@@ -730,128 +730,6 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         }
       }
 
-      // ─── DIAGNÓSTICO ADICIONAL: msgLoadState ─────────────────────────────
-      // Registrar métodos y estado del state machine interno de WA Web moderno.
-      // Esto nos ayuda a identificar qué API usa la versión actual para cargar.
-      try {
-        var mls = chatObj.msgs && chatObj.msgs.msgLoadState;
-        if (mls) {
-          var mlsKeys = [];
-          try { mlsKeys = Object.keys(mls).slice(0, 15); } catch(_) {}
-          var mlsMethods = [];
-          try {
-            var protoMls = Object.getPrototypeOf(mls);
-            if (protoMls) {
-              var protoNames = Object.getOwnPropertyNames(protoMls);
-              for (var pn = 0; pn < protoNames.length && mlsMethods.length < 15; pn++) {
-                var nm = protoNames[pn];
-                if (nm !== 'constructor' && typeof mls[nm] === 'function') mlsMethods.push(nm);
-              }
-            }
-          } catch(_) {}
-          diagnostics.mlsKeys = mlsKeys;
-          diagnostics.mlsMethods = mlsMethods;
-          diagnostics.mlsState = {};
-          for (var si = 0; si < mlsKeys.length; si++) {
-            var sk = mlsKeys[si];
-            try {
-              var sv = mls[sk];
-              var tv = typeof sv;
-              if (tv === 'boolean' || tv === 'number' || tv === 'string' || sv === null) {
-                diagnostics.mlsState[sk] = sv;
-              }
-            } catch(_) {}
-          }
-        }
-      } catch(_) {}
-
-      // ─── ESTRATEGIA 4: Activación UI (último recurso) ────────────────────
-      // En WA Web moderno, msgLoadState solo permite cargar mensajes cuando el chat
-      // está activo en la UI. Lo activamos temporalmente para forzar la carga, y
-      // luego llamamos loadEarlierMsgs en loop. Restauramos el chat activo previo.
-      if (Object.keys(msgMap).length < lim && window.Store && window.Store.Cmd) {
-        diagnostics.strategiesUsed.push('ui');
-        var prevActive = null;
-        try { prevActive = (window.Store.Cmd.activeChat) || null; } catch(_) {}
-
-        var opened = false;
-        try {
-          if (typeof window.Store.Cmd.openChatAt === 'function') {
-            try { await window.Store.Cmd.openChatAt(chatObj, { collapseLabel: 'latest' }); opened = true; }
-            catch(_) {
-              try { await window.Store.Cmd.openChatAt(chatObj); opened = true; } catch(_) {}
-            }
-          }
-          if (!opened && typeof window.Store.Cmd.openChatBottom === 'function') {
-            try { await window.Store.Cmd.openChatBottom(chatObj); opened = true; } catch(_) {}
-          }
-          if (!opened && typeof window.Store.Cmd.openChat === 'function') {
-            try { await window.Store.Cmd.openChat(chatObj); opened = true; } catch(_) {}
-          }
-        } catch(e) {
-          diagnostics.errorsInLoop.push({ iter: 'ui_open', error: (e && e.message) || String(e) });
-        }
-        diagnostics.uiOpened = opened;
-
-        if (opened) {
-          // Esperar a que el chat se active y haga la carga inicial
-          await new Promise(function(r) { setTimeout(r, 2500); });
-          addMsgs(chatObj.msgs.getModelsArray());
-
-          var emptyStreak4 = 0;
-          for (var u = 0; u < 80 && Object.keys(msgMap).length < lim; u++) {
-            diagnostics.iterations++;
-            var prevU = Object.keys(msgMap).length;
-            var errU = null;
-            try {
-              if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
-              if (convMsgs && convMsgs.loadEarlierMsgs) {
-                var loadedU = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-                addMsgs(loadedU);
-              }
-            } catch(e) {
-              errU = (e && e.message) || String(e);
-              diagnostics.errorsInLoop.push({ iter: 'ui_' + u, error: errU });
-            }
-            addMsgs(chatObj.msgs.getModelsArray());
-
-            if (u < 3) {
-              diagnostics.perIterFirst5.push({
-                iter: 'ui_' + u,
-                loadedRet: -1,
-                addedFromLoaded: 0,
-                addedFromCollection: 0,
-                totalBefore: prevU,
-                totalAfter: Object.keys(msgMap).length,
-                noEarlierFlag: !!(chatObj.msgs && chatObj.msgs.noEarlierMsgs),
-                error: errU
-              });
-            }
-
-            var gainedU = Object.keys(msgMap).length - prevU;
-            if (gainedU === 0) {
-              emptyStreak4++;
-              if (emptyStreak4 >= 5) break;
-              await new Promise(function(r) { setTimeout(r, 800); });
-            } else {
-              emptyStreak4 = 0;
-              await new Promise(function(r) { setTimeout(r, 400); });
-            }
-          }
-
-          // Restaurar chat activo anterior (si había uno distinto)
-          try {
-            if (prevActive && prevActive !== chatObj) {
-              if (typeof window.Store.Cmd.openChatAt === 'function') {
-                await window.Store.Cmd.openChatAt(prevActive);
-              } else if (typeof window.Store.Cmd.openChat === 'function') {
-                await window.Store.Cmd.openChat(prevActive);
-              }
-            }
-          } catch(_) {}
-        }
-      }
-
       // Ordenar por timestamp y limitar
       var allMsgs = [];
       for (var k in msgMap) { if (msgMap.hasOwnProperty(k)) allMsgs.push(msgMap[k]); }
@@ -887,11 +765,7 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
       if (!(global as any).__diagLoggedFor[chat.name]) {
         (global as any).__diagLoggedFor[chat.name] = true;
         const level = result.msgs.length < 2 && limit > 2 ? 'WARN' : 'INFO';
-        log(level, `[DIAG ${chat.name}] iniCache=${d.initialCount} loaders=[${(d.availableLoaders || []).join(',')}] estrategias=[${(d.strategiesUsed || []).join(',')}] iters=${d.iterations} vacías=${d.emptyIterations} final=${d.finalCount} uiOpened=${d.uiOpened === undefined ? 'n/a' : d.uiOpened}`);
-        log(level, `[DIAG ${chat.name}] collKeys=${JSON.stringify((d.msgCollectionKeys || []).slice(0, 10))}`);
-        if (d.mlsMethods || d.mlsKeys) {
-          log(level, `[DIAG ${chat.name}] mlsMethods=${JSON.stringify(d.mlsMethods || [])} mlsKeys=${JSON.stringify(d.mlsKeys || [])} mlsState=${JSON.stringify(d.mlsState || {}).slice(0, 300)}`);
-        }
+        log(level, `[DIAG ${chat.name}] iniCache=${d.initialCount} loaders=[${(d.availableLoaders || []).join(',')}] estrategias=[${(d.strategiesUsed || []).join(',')}] iters=${d.iterations} vacías=${d.emptyIterations} final=${d.finalCount} collKeys=${JSON.stringify((d.msgCollectionKeys || []).slice(0, 10))}`);
         if (d.perIterFirst5 && d.perIterFirst5.length) {
           for (const it of d.perIterFirst5) {
             log(level, `[DIAG ${chat.name}] iter=${it.iter} loadedRet=${it.loadedRet} +loaded=${it.addedFromLoaded} +coll=${it.addedFromCollection} total=${it.totalBefore}->${it.totalAfter} noEarlier=${it.noEarlierFlag}${it.error ? ' ERR='+it.error : ''}`);
