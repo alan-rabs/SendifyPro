@@ -204,11 +204,20 @@ export async function startBot() {
     await patchWAWebMessageLoader();
 
     try {
-      log('INFO', 'Esperando 20 segundos para permitir la sincronización inicial de chats...');
-      await new Promise(resolve => setTimeout(resolve, 20000));
+      log('INFO', 'Esperando 60 segundos para permitir la sincronización inicial de chats (sesión nueva)...');
+      await new Promise(resolve => setTimeout(resolve, 60000));
 
       log('INFO', `Obteniendo lista de chats para recuperar mensajes pendientes (esto puede demorar)...`);
-      const chats = await client.getChats();
+      let chats = await client.getChats();
+
+      // Si la lista está vacía o muy chica, reintentar con espera adicional
+      // (la sincronización puede tardar más en sesiones nuevas)
+      for (let retry = 0; retry < 3 && chats.length < 5; retry++) {
+        log('INFO', `Lista de chats incompleta (${chats.length}). Esperando 30s adicionales y reintentando...`);
+        await new Promise(resolve => setTimeout(resolve, 30000));
+        chats = await client.getChats();
+      }
+      log('INFO', `Total de chats detectados: ${chats.length}`);
       let totalProcessed = 0;
 
       for (const chatConf of (config.chatConfigs || [])) {
