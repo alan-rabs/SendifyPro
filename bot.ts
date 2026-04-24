@@ -4,16 +4,11 @@ import qrcode from 'qrcode';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
 import cron from 'node-cron';
-import { createRequire } from 'module';
 import * as db from './db.js';
-import { getAuditLogs } from './db.js';
 import * as XLSX from 'xlsx';
-// import { getAuditLogs } from './db.js'; // Commented out to avoid circular dependency
 
 import { PDFParse } from 'pdf-parse';
-const require = createRequire(import.meta.url);
 
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 
@@ -108,8 +103,7 @@ export function getConfig() {
 
 export function getStats() {
   try {
-    const stats = db.getStats();
-    return stats;
+    return db.getStats();
   } catch (e) {
     console.error("Error in getStats (bot.ts):", e);
     return { processedPdfs: 0, emailsSent: 0, errorsDetected: 0, recentFiles: [], recentEvents: [], recentEmails: [], emailQueue: [], lastEmailError: '', lastProcessedFile: 'Ninguno' };
@@ -1489,7 +1483,6 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
   const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
   if (logs.length === 0) return null;
 
-  const now = new Date();
   let start = new Date();
   let end = new Date();
 
