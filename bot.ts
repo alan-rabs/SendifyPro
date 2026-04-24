@@ -801,10 +801,31 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
             return v && (k.indexOf('Chat') !== -1 || k.indexOf('Msg') !== -1 || k.indexOf('Load') !== -1 || k.indexOf('History') !== -1 || k.indexOf('Conv') !== -1);
           }).slice(0, 30);
 
+          // Listar TODOS los métodos de Cmd sin filtro (buscamos cualquier pista)
           if (window.Store.Cmd) {
-            diagnostics.cmdMethods = getMethodsOf(window.Store.Cmd, 40).filter(function(m) {
-              return m.indexOf('pen') !== -1 || m.indexOf('hat') !== -1 || m.indexOf('oad') !== -1 || m.indexOf('ocus') !== -1 || m.indexOf('ub') !== -1 || m.indexOf('et') === 0;
-            });
+            diagnostics.allCmdMethods = getMethodsOf(window.Store.Cmd, 200);
+          }
+
+          // Exponer métodos de HistorySync (candidato alto para cargar historial)
+          if (window.Store.HistorySync) {
+            diagnostics.historySyncMethods = getMethodsOf(window.Store.HistorySync, 40);
+            diagnostics.historySyncKeys = Object.keys(window.Store.HistorySync).slice(0, 20);
+          }
+
+          // Exponer métodos de ConversationMsgs (el módulo del parche actual)
+          if (window.Store.ConversationMsgs) {
+            diagnostics.convMsgsMethods = getMethodsOf(window.Store.ConversationMsgs, 40);
+            diagnostics.convMsgsKeys = Object.keys(window.Store.ConversationMsgs).slice(0, 20);
+          }
+
+          // Exponer Msg (colección global de mensajes, puede tener queryMsgsBefore, etc.)
+          if (window.Store.Msg) {
+            diagnostics.msgStoreMethods = getMethodsOf(window.Store.Msg, 40);
+          }
+
+          // Exponer ChatGetters (helpers del chat)
+          if (window.Store.ChatGetters) {
+            diagnostics.chatGettersMethods = getMethodsOf(window.Store.ChatGetters, 30);
           }
         }
       } catch(_) {}
@@ -1000,8 +1021,20 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         if (d.storeKeys) {
           log(level, `[DIAG ${chat.name}] storeKeys=${JSON.stringify(d.storeKeys).slice(0, 500)}`);
         }
-        if (d.cmdMethods) {
-          log(level, `[DIAG ${chat.name}] cmdMethods=${JSON.stringify(d.cmdMethods).slice(0, 500)}`);
+        if (d.allCmdMethods) {
+          log(level, `[DIAG ${chat.name}] allCmdMethods(${d.allCmdMethods.length})=${JSON.stringify(d.allCmdMethods).slice(0, 1500)}`);
+        }
+        if (d.historySyncMethods || d.historySyncKeys) {
+          log(level, `[DIAG ${chat.name}] historySync methods=${JSON.stringify(d.historySyncMethods || [])} keys=${JSON.stringify(d.historySyncKeys || [])}`);
+        }
+        if (d.convMsgsMethods || d.convMsgsKeys) {
+          log(level, `[DIAG ${chat.name}] ConversationMsgs methods=${JSON.stringify(d.convMsgsMethods || [])} keys=${JSON.stringify(d.convMsgsKeys || [])}`);
+        }
+        if (d.msgStoreMethods) {
+          log(level, `[DIAG ${chat.name}] Store.Msg methods=${JSON.stringify(d.msgStoreMethods).slice(0, 500)}`);
+        }
+        if (d.chatGettersMethods) {
+          log(level, `[DIAG ${chat.name}] ChatGetters=${JSON.stringify(d.chatGettersMethods).slice(0, 500)}`);
         }
         if (d.perIterFirst5 && d.perIterFirst5.length) {
           for (const it of d.perIterFirst5) {
