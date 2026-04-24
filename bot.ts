@@ -557,18 +557,31 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
       }
 
       var lim = ${JSON.stringify(limit)};
+      // Resetear noEarlierMsgs para que WA Web consulte al servidor aunque el caché esté vacío
+      if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
       var msgs = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
 
       if (moduleOk) {
+        var emptyStreak = 0;
         for (var i = 0; i < 80 && msgs.length < lim; i++) {
           var prevLen = msgs.length;
+          chatObj.msgs.noEarlierMsgs = false; // Forzar consulta al servidor en cada iteración
           try {
             var loaded = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-            if (!loaded || loaded.length === 0) break;
+            if (!loaded || loaded.length === 0) {
+              emptyStreak++;
+              if (emptyStreak >= 3) break; // 3 respuestas vacías consecutivas = no hay más
+              await new Promise(function(r) { setTimeout(r, 800); });
+              continue;
+            }
+            emptyStreak = 0;
           } catch(e) { break; }
-          await new Promise(function(r) { setTimeout(r, 200); });
+          await new Promise(function(r) { setTimeout(r, 400); });
           msgs = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
-          if (msgs.length <= prevLen) break;
+          if (msgs.length <= prevLen) {
+            emptyStreak++;
+            if (emptyStreak >= 3) break;
+          }
         }
       }
 
@@ -607,29 +620,12 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 }
 
 async function safeFetchMessages(chat: any, searchOptions: any) {
-  // chat.fetchMessages se llama primero aunque lance waitForChatLoading:
-  // esa primera llamada pupPage.evaluate inicializa el módulo WAWebChatLoadMessages
-  // (lazy-load de WA Web Comet). Sin esa llamada previa, el módulo no existe cuando
-  // fetchMessagesFromMemory intenta parcharlo inline.
+  // chat.fetchMessages({limit:1}) sirve como warm-up para inicializar el módulo
+  // WAWebChatLoadMessages (lazy-load de WA Web Comet). El resultado se descarta;
+  // fetchMessagesFromMemory hace la carga real con reset de noEarlierMsgs.
   await patchWAWebMessageLoader();
-  try {
-    const messages = await chat.fetchMessages(searchOptions);
-    return messages.map((m: any) => {
-      if (m.acceptGroupV4Invite === undefined) m.acceptGroupV4Invite = async () => false;
-      return m;
-    });
-  } catch (e: any) {
-    const msg2 = e.message || '';
-    const isKnown = msg2.includes('waitForChatLoading') ||
-                    msg2.includes('loadEarlierMsgs') ||
-                    msg2.includes('noEarlierMsgs');
-    if (isKnown) {
-      log('WARN', `fetchMessages lanzó error de estado WA Web en "${chat.name}", usando carga iterativa...`);
-      return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
-    }
-    log('ERROR', `Error inesperado en safeFetchMessages para "${chat.name}": ${e.message}`);
-    throw e;
-  }
+  try { await chat.fetchMessages({ limit: 1 }); } catch (_) { /* warm-up */ }
+  return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
 }
 
 async function processMessage(msg: any): Promise<boolean> {
