@@ -177,7 +177,7 @@ export async function startBot() {
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                //'--window-position=-2000,-2000',  // fuera de pantalla visible
+                '--window-position=-2000,-2000',  // fuera de pantalla visible
                 '--window-size=400,600',           // ventana pequeña
                 '--disable-blink-features=AutomationControlled',
                 '--disable-infobars'
@@ -532,42 +532,42 @@ async function patchWAWebMessageLoader(): Promise<void> {
 //  - "Tu teléfono no está conectado" con botón para reconectar
 //  - Otros dialogs que aparecen encima del chat y bloquean clicks
 // Se llama antes de cada click crítico para asegurar que la UI es usable.
+//
+// IMPORTANTE: el código del evaluate se pasa como STRING (no callback) para
+// evitar que tsx/esbuild inyecte helpers como __name() que no existen en el browser.
 async function dismissWAPopups(): Promise<boolean> {
     if (!client || !client.pupPage) return false;
     const page: any = client.pupPage;
 
     try {
         // Buscar dialogs/popups visibles y marcar el botón principal (si existe)
-        const buttonMarker = await page.evaluate(() => {
-            // Textos conocidos del botón "Usar aquí" en varios idiomas
-            const targetTexts = [
-                'usar aquí', 'use here', 'usar aqui',
-                'click to use whatsapp here', 'use whatsapp here',
-                'open here', 'abrir aquí', 'reconnect', 'reconectar',
-                'continuar', 'continue', 'ok', 'entendido', 'got it'
-            ];
-
-            // Buscar todos los botones y divs clickeables
-            const candidates = document.querySelectorAll('button, [role="button"], div[role="button"]');
-            for (let i = 0; i < candidates.length; i++) {
-                const el = candidates[i] as HTMLElement;
-                const text = (el.textContent || '').trim().toLowerCase();
-                if (!text) continue;
-                // Hacer match si el texto es EXACTO (no parcial, para evitar falsos positivos)
-                for (let j = 0; j < targetTexts.length; j++) {
-                    if (text === targetTexts[j] || text.startsWith(targetTexts[j])) {
-                        // Verificar que el elemento es realmente visible
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0) {
-                            const marker = '__wwjs_popup_btn_' + Date.now();
-                            el.setAttribute('data-wwjs-popup-btn', marker);
-                            return marker;
-                        }
-                    }
-                }
+        const findButtonCode = `(function() {
+      var targetTexts = [
+        'usar aquí', 'use here', 'usar aqui',
+        'click to use whatsapp here', 'use whatsapp here',
+        'open here', 'abrir aquí', 'reconnect', 'reconectar',
+        'continuar', 'continue', 'ok', 'entendido', 'got it'
+      ];
+      var candidates = document.querySelectorAll('button, [role="button"], div[role="button"]');
+      for (var i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        var text = (el.textContent || '').trim().toLowerCase();
+        if (!text) continue;
+        for (var j = 0; j < targetTexts.length; j++) {
+          if (text === targetTexts[j] || text.indexOf(targetTexts[j]) === 0) {
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              var marker = '__wwjs_popup_btn_' + Date.now();
+              el.setAttribute('data-wwjs-popup-btn', marker);
+              return marker;
             }
-            return null;
-        });
+          }
+        }
+      }
+      return null;
+    })()`;
+
+        const buttonMarker: string | null = await page.evaluate(findButtonCode);
 
         if (!buttonMarker) return false; // No había popup que cerrar
 
@@ -607,60 +607,67 @@ async function clickChatInUI(chatName: string, scrollCount: number = 20): Promis
 
         const normalized = (chatName || '').toUpperCase();
 
-        // Optimización: si el chat ya está activo en la UI, skip el click (ahorra 3.5s).
-        // Esto es importante para barridos que escanean el mismo chat repetidamente.
-        const alreadyActive = await page.evaluate((nameUpper: string) => {
-            const headerEl = document.querySelector('#main header span[title], #main header span[dir="auto"]');
-            if (!headerEl) return false;
-            const headerText = (headerEl.textContent || headerEl.getAttribute('title') || '').toUpperCase().trim();
-            return headerText === nameUpper;
-        }, normalized);
+        // Check 1: ¿El chat ya está activo? (skip click si sí)
+        // IMPORTANTE: código como STRING para evitar inyección de __name por tsx/esbuild.
+        const checkActiveCode = `(function() {
+      var nameUpper = ${JSON.stringify(normalized)};
+      var headerEl = document.querySelector('#main header span[title], #main header span[dir="auto"]');
+      if (!headerEl) return false;
+      var headerText = (headerEl.textContent || headerEl.getAttribute('title') || '').toUpperCase().trim();
+      return headerText === nameUpper;
+    })()`;
+
+        const alreadyActive: boolean = await page.evaluate(checkActiveCode);
 
         if (!alreadyActive) {
             // Paso 1: Localizar el chat en el DOM (con scroll en la lista si no está visible)
-            const foundChat = await page.evaluate(async (nameUpper: string) => {
-                function findChatElement() {
-                    const titled = document.querySelectorAll('span[title], div[title]');
-                    for (let i = 0; i < titled.length; i++) {
-                        const el = titled[i] as HTMLElement;
-                        const t = el.getAttribute('title') || '';
-                        if (t.toUpperCase() === nameUpper) {
-                            let node: HTMLElement | null = el;
-                            for (let up = 0; up < 15 && node; up++) {
-                                const role = node.getAttribute ? node.getAttribute('role') : null;
-                                const testid = node.getAttribute ? node.getAttribute('data-testid') : null;
-                                if (role === 'listitem' || role === 'row' || role === 'gridcell' ||
-                                    testid === 'cell-frame-container' || testid === 'chat') {
-                                    return node;
-                                }
-                                node = node.parentElement;
-                            }
-                            return el;
-                        }
-                    }
-                    return null;
+            const findChatCode = `(async function() {
+        var nameUpper = ${JSON.stringify(normalized)};
+
+        function findChatElement() {
+          var titled = document.querySelectorAll('span[title], div[title]');
+          for (var i = 0; i < titled.length; i++) {
+            var el = titled[i];
+            var t = el.getAttribute('title') || '';
+            if (t.toUpperCase() === nameUpper) {
+              var node = el;
+              for (var up = 0; up < 15 && node; up++) {
+                var role = node.getAttribute ? node.getAttribute('role') : null;
+                var testid = node.getAttribute ? node.getAttribute('data-testid') : null;
+                if (role === 'listitem' || role === 'row' || role === 'gridcell' ||
+                    testid === 'cell-frame-container' || testid === 'chat') {
+                  return node;
                 }
+                node = node.parentElement;
+              }
+              return el;
+            }
+          }
+          return null;
+        }
 
-                let chatEl = findChatElement();
-                if (!chatEl) {
-                    const chatList = document.querySelector('[role="grid"]') ||
-                        document.querySelector('#pane-side') ||
-                        document.querySelector('[data-tab="3"]');
-                    if (chatList) {
-                        for (let sc = 0; sc < 20 && !chatEl; sc++) {
-                            (chatList as HTMLElement).scrollTop += 500;
-                            await new Promise((r) => setTimeout(r, 300));
-                            chatEl = findChatElement();
-                        }
-                    }
-                }
+        var chatEl = findChatElement();
+        if (!chatEl) {
+          var chatList = document.querySelector('[role="grid"]') ||
+                         document.querySelector('#pane-side') ||
+                         document.querySelector('[data-tab="3"]');
+          if (chatList) {
+            for (var sc = 0; sc < 20 && !chatEl; sc++) {
+              chatList.scrollTop = chatList.scrollTop + 500;
+              await new Promise(function(r) { setTimeout(r, 300); });
+              chatEl = findChatElement();
+            }
+          }
+        }
 
-                if (!chatEl) return null;
+        if (!chatEl) return null;
 
-                const marker = '__wwjs_click_target_' + Date.now();
-                chatEl.setAttribute('data-wwjs-click-target', marker);
-                return marker;
-            }, normalized);
+        var marker = '__wwjs_click_target_' + Date.now();
+        chatEl.setAttribute('data-wwjs-click-target', marker);
+        return marker;
+      })()`;
+
+            const foundChat: string | null = await page.evaluate(findChatCode);
 
             if (!foundChat) {
                 log('WARN', `clickChatInUI: no se encontró el chat "${chatName}" en el DOM.`);
@@ -673,11 +680,16 @@ async function clickChatInUI(chatName: string, scrollCount: number = 20): Promis
             if (!elementHandle) return false;
 
             try {
-                await elementHandle.evaluate((el: any) => {
-                    el.scrollIntoView({ block: 'center', behavior: 'instant' });
-                });
+                // Scroll into view usando STRING (no callback TS)
+                await page.evaluate(`(function() {
+          var el = document.querySelector('[data-wwjs-click-target="${foundChat}"]');
+          if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        })()`);
                 await new Promise(r => setTimeout(r, 300));
+
+                // CLICK REAL: isTrusted=true, dispara handlers de React/WA Web
                 await elementHandle.click();
+                log('INFO', `✅ clickChatInUI: click real en "${chatName}" ejecutado.`);
             } catch (clickErr: any) {
                 log('WARN', `clickChatInUI: error en click real: ${clickErr.message}`);
                 return false;
@@ -690,21 +702,22 @@ async function clickChatInUI(chatName: string, scrollCount: number = 20): Promis
         }
 
         // Paso 4: Scroll al tope del panel de mensajes para cargar históricos.
-        // El número de scrolls es proporcional a los mensajes deseados.
-        // WA Web carga ~20-30 mensajes por scroll, así que ajustamos.
-        try {
-            await page.evaluate(async (numScrolls: number) => {
-                const msgPane = document.querySelector('[data-testid="conversation-panel-messages"]') ||
+        // Número proporcional al limit solicitado.
+        const scrollCode = `(async function() {
+      var numScrolls = ${JSON.stringify(scrollCount)};
+      var msgPane = document.querySelector('[data-testid="conversation-panel-messages"]') ||
                     document.querySelector('#main [role="application"]') ||
                     document.querySelector('#main .copyable-area');
-                if (!msgPane) return;
-                for (let i = 0; i < numScrolls; i++) {
-                    (msgPane as HTMLElement).scrollTop = 0;
-                    msgPane.dispatchEvent(new Event('scroll', { bubbles: true }));
-                    await new Promise(r => setTimeout(r, 500));
-                }
-            }, scrollCount);
-        } catch(_) {}
+      if (!msgPane) return false;
+      for (var i = 0; i < numScrolls; i++) {
+        msgPane.scrollTop = 0;
+        msgPane.dispatchEvent(new Event('scroll', { bubbles: true }));
+        await new Promise(function(r) { setTimeout(r, 500); });
+      }
+      return true;
+    })()`;
+
+        await page.evaluate(scrollCode);
 
         return true;
     } catch (e: any) {
