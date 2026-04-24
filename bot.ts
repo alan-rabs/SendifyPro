@@ -401,12 +401,16 @@ async function patchWAWebMessageLoader(): Promise<void> {
 
         const origFn = mod.loadEarlierMsgs;
 
-        // Mock de estado que bypasea waitForChatLoading en modo headless
-        const mockState: any = {
-          waitForChatLoading: () => Promise.resolve(),
-          isChatLoaded: true,
-          isLoaded: true,
-        };
+        const mockResult: any = { noEarlierMsgs: false };
+        const mockState: any = new Proxy(
+          { waitForChatLoading: () => Promise.resolve(mockResult), isChatLoaded: true, isLoaded: true, noEarlierMsgs: false },
+          { get(t: any, p: any, r: any) {
+              if (typeof p === 'symbol') return Reflect.get(t, p, r);
+              if (p === 'then' || p === 'catch' || p === 'finally') return undefined;
+              if (p in t) return t[p];
+              return () => mockResult;
+          }}
+        );
 
         // Palabras clave que identifican propiedades de estado de carga en WA Web Comet
         const STATE_KW = [
@@ -510,7 +514,18 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
 
       if (moduleOk && !convMsgs.__wwjsPatch) {
         var origFn = convMsgs.loadEarlierMsgs;
-        var mockState = { waitForChatLoading: function() { return Promise.resolve(); }, isChatLoaded: true, isLoaded: true };
+        // waitForChatLoading debe resolver con un objeto que tenga noEarlierMsgs:false,
+        // porque loadEarlierMsgs usa el resultado: const r = await state.waitForChatLoading(); if(r.noEarlierMsgs)...
+        var mockResult = { noEarlierMsgs: false };
+        var mockState = new Proxy(
+          { waitForChatLoading: function() { return Promise.resolve(mockResult); }, isChatLoaded: true, isLoaded: true, noEarlierMsgs: false },
+          { get: function(t,p,r) {
+              if (typeof p === 'symbol') return Reflect.get(t,p,r);
+              if (p === 'then' || p === 'catch' || p === 'finally') return undefined;
+              if (p in t) return t[p];
+              return function() { return mockResult; };
+          }}
+        );
         var STATE_KW = ['loadingstate','convstate','chatstate','loadstate','chatloading','convloading','conversationstate','panelstate','viewstate'];
         var BROAD_SKIP = new Set(['then','catch','finally','length','constructor','prototype','__proto__','toString','valueOf','hasOwnProperty','isPrototypeOf']);
         function makeProxy(obj) {
@@ -610,10 +625,12 @@ async function safeFetchMessages(chat: any, searchOptions: any) {
       return m;
     });
   } catch (e: any) {
-    const isKnown = (e.message || '').includes('waitForChatLoading') ||
-                    (e.message || '').includes('loadEarlierMsgs');
+    const msg2 = e.message || '';
+    const isKnown = msg2.includes('waitForChatLoading') ||
+                    msg2.includes('loadEarlierMsgs') ||
+                    msg2.includes('noEarlierMsgs');
     if (isKnown) {
-      log('WARN', `fetchMessages lanzó waitForChatLoading en "${chat.name}", aplicando parche inline...`);
+      log('WARN', `fetchMessages lanzó error de estado WA Web en "${chat.name}", usando carga iterativa...`);
       return await fetchMessagesFromMemory(chat, searchOptions?.limit || 100);
     }
     log('ERROR', `Error inesperado en safeFetchMessages para "${chat.name}": ${e.message}`);
