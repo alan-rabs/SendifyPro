@@ -491,132 +491,97 @@ async function patchWAWebMessageLoader(): Promise<void> {
 }
 
 // Carga mensajes históricos con loadEarlierMsgs parchado inline.
-// El parche se aplica aquí donde el módulo está disponible con certeza.
-// Diagnóstico: devuelve { msgs, diag } para loguear el estado desde Node.js.
+// IMPORTANTE: el código se pasa como STRING a pupPage.evaluate para evitar que
+// esbuild/tsx inyecte helpers como __name() que no existen en el contexto del browser.
 async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]> {
   if (!client) return [];
   const chatId = chat.id._serialized;
-  try {
-    const result = await client.pupPage.evaluate(async (cId: string, lim: number) => {
-      try {
-        const chatObj = await (window as any).WWebJS.getChat(cId, { getAsModel: false });
-        if (!chatObj?.msgs) return { msgs: [], diag: 'no_chat' };
 
-        // window.Store.ConversationMsgs puede ser null si el chunk de WA Web no había
-        // cargado cuando wwebjs inyectó Store.js. En ese caso, window.require() directo
-        // devuelve el módulo ya disponible después de la primera carga del chat.
-        let convMsgs: any = (window as any).Store?.ConversationMsgs;
-        if (!convMsgs?.loadEarlierMsgs) {
-          try { convMsgs = (window as any).require('WAWebChatLoadMessages'); } catch (_) {}
-        }
+  const code = `(async function() {
+    try {
+      var chatObj = await window.WWebJS.getChat(${JSON.stringify(chatId)}, { getAsModel: false });
+      if (!chatObj || !chatObj.msgs) return { msgs: [], diag: 'no_chat' };
 
-        const moduleOk = !!(convMsgs?.loadEarlierMsgs);
-
-        if (moduleOk && !(convMsgs as any).__wwjsPatch) {
-          // ── PARCHE INLINE ────────────────────────────────────────────────────
-          // Envuelve los argumentos en Proxy para proveer un mock de waitForChatLoading
-          // que de otro modo es undefined en modo headless (sin panel de chat abierto).
-          const origFn = convMsgs.loadEarlierMsgs;
-          const mockState: any = {
-            waitForChatLoading: () => Promise.resolve(),
-            isChatLoaded: true,
-            isLoaded: true,
-          };
-          const STATE_KW = [
-            'loadingstate', 'convstate', 'chatstate', 'loadstate',
-            'chatloading', 'convloading', 'conversationstate', 'panelstate', 'viewstate',
-          ];
-          const BROAD_SKIP = new Set([
-            'then', 'catch', 'finally', 'length', 'constructor',
-            'prototype', '__proto__', 'toString', 'valueOf',
-            'hasOwnProperty', 'isPrototypeOf',
-          ]);
-
-          const makeProxy = (obj: any): any => {
-            if (!obj || typeof obj !== 'object') return obj;
-            return new Proxy(obj, {
-              get(target: any, prop: any, recv: any) {
-                if (typeof prop === 'symbol') return Reflect.get(target, prop, recv);
-                if (prop === 'then' || prop === 'catch' || prop === 'finally') {
-                  return Reflect.get(target, prop, recv);
-                }
-                const val = Reflect.get(target, prop, recv);
-                if (val === undefined && typeof prop === 'string' &&
-                    STATE_KW.some((k: string) => prop.toLowerCase().includes(k))) {
-                  return mockState;
-                }
-                return val;
-              },
-            });
-          };
-
-          const makeBroadProxy = (obj: any): any => {
-            if (!obj || typeof obj !== 'object') return obj;
-            return new Proxy(obj, {
-              get(target: any, prop: any, recv: any) {
-                if (typeof prop === 'symbol') return Reflect.get(target, prop, recv);
-                if (BROAD_SKIP.has(prop as string)) return Reflect.get(target, prop, recv);
-                const val = Reflect.get(target, prop, recv);
-                if (val === undefined && typeof prop === 'string' && isNaN(Number(prop))) {
-                  return mockState;
-                }
-                return val;
-              },
-            });
-          };
-
-          convMsgs.loadEarlierMsgs = async function (c: any, m: any) {
-            try {
-              return await origFn.call(this, makeProxy(c), makeProxy(m));
-            } catch (e1: any) {
-              if (!(e1?.message || '').includes('waitForChatLoading')) {
-                if ((e1?.message || '').length > 0) throw e1;
-                return [];
-              }
-            }
-            try {
-              return await origFn.call(this, makeBroadProxy(c), makeBroadProxy(m));
-            } catch (e2: any) {
-              if ((e2?.message || '').includes('waitForChatLoading')) return [];
-              throw e2;
-            }
-          };
-          (convMsgs as any).__wwjsPatch = true;
-          // ── FIN PARCHE INLINE ────────────────────────────────────────────────
-        }
-
-        let msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
-
-        if (moduleOk) {
-          // Carga iterativa: cada llamada retrocede ~20-50 mensajes en el tiempo
-          for (let i = 0; i < 80 && msgs.length < lim; i++) {
-            const prevLen = msgs.length;
-            try {
-              const loaded = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
-              if (!loaded || loaded.length === 0) break;
-            } catch (_) { break; }
-            await new Promise((r: any) => setTimeout(r, 200));
-            msgs = chatObj.msgs.getModelsArray().filter((m: any) => !m.isNotification);
-            if (msgs.length <= prevLen) break;
-          }
-        }
-
-        msgs.sort((a: any, b: any) => a.t - b.t);
-        if (lim > 0 && msgs.length > lim) msgs = msgs.slice(msgs.length - lim);
-        const serialized = msgs.map((m: any) => {
-          try { return (window as any).WWebJS.getMessageModel(m); } catch (_) { return null; }
-        }).filter(Boolean);
-
-        return { msgs: serialized, diag: moduleOk ? 'ok' : 'no_module' };
-      } catch (innerErr: any) {
-        return { msgs: [], diag: `inner_error:${innerErr?.message ?? '?'}` };
+      var convMsgs = (window.Store && window.Store.ConversationMsgs) || null;
+      if (!convMsgs || !convMsgs.loadEarlierMsgs) {
+        try { convMsgs = window.require('WAWebChatLoadMessages'); } catch(e) {}
       }
-    }, chatId, limit);
+      var moduleOk = !!(convMsgs && convMsgs.loadEarlierMsgs);
+
+      if (moduleOk && !convMsgs.__wwjsPatch) {
+        var origFn = convMsgs.loadEarlierMsgs;
+        var mockState = { waitForChatLoading: function() { return Promise.resolve(); }, isChatLoaded: true, isLoaded: true };
+        var STATE_KW = ['loadingstate','convstate','chatstate','loadstate','chatloading','convloading','conversationstate','panelstate','viewstate'];
+        var BROAD_SKIP = new Set(['then','catch','finally','length','constructor','prototype','__proto__','toString','valueOf','hasOwnProperty','isPrototypeOf']);
+        function makeProxy(obj) {
+          if (!obj || typeof obj !== 'object') return obj;
+          return new Proxy(obj, { get: function(t,p,r) {
+            if (typeof p === 'symbol') return Reflect.get(t,p,r);
+            if (p==='then'||p==='catch'||p==='finally') return Reflect.get(t,p,r);
+            var v = Reflect.get(t,p,r);
+            if (v===undefined && typeof p==='string' && STATE_KW.some(function(k){ return p.toLowerCase().indexOf(k)!==-1; })) return mockState;
+            return v;
+          }});
+        }
+        function makeBroadProxy(obj) {
+          if (!obj || typeof obj !== 'object') return obj;
+          return new Proxy(obj, { get: function(t,p,r) {
+            if (typeof p === 'symbol') return Reflect.get(t,p,r);
+            if (BROAD_SKIP.has(p)) return Reflect.get(t,p,r);
+            var v = Reflect.get(t,p,r);
+            if (v===undefined && typeof p==='string' && isNaN(Number(p))) return mockState;
+            return v;
+          }});
+        }
+        convMsgs.loadEarlierMsgs = async function(c,m) {
+          try { return await origFn.call(this, makeProxy(c), makeProxy(m)); }
+          catch(e1) {
+            if (!e1||!e1.message||e1.message.indexOf('waitForChatLoading')===-1) {
+              if (e1&&e1.message&&e1.message.length>0) throw e1;
+              return [];
+            }
+          }
+          try { return await origFn.call(this, makeBroadProxy(c), makeBroadProxy(m)); }
+          catch(e2) { if (e2&&e2.message&&e2.message.indexOf('waitForChatLoading')!==-1) return []; throw e2; }
+        };
+        convMsgs.__wwjsPatch = true;
+      }
+
+      var lim = ${JSON.stringify(limit)};
+      var msgs = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
+
+      if (moduleOk) {
+        for (var i = 0; i < 80 && msgs.length < lim; i++) {
+          var prevLen = msgs.length;
+          try {
+            var loaded = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+            if (!loaded || loaded.length === 0) break;
+          } catch(e) { break; }
+          await new Promise(function(r) { setTimeout(r, 200); });
+          msgs = chatObj.msgs.getModelsArray().filter(function(m) { return !m.isNotification; });
+          if (msgs.length <= prevLen) break;
+        }
+      }
+
+      msgs.sort(function(a,b) { return a.t - b.t; });
+      if (lim > 0 && msgs.length > lim) msgs = msgs.slice(msgs.length - lim);
+      var serialized = msgs.map(function(m) {
+        try { return window.WWebJS.getMessageModel(m); } catch(e) { return null; }
+      }).filter(Boolean);
+
+      return { msgs: serialized, diag: moduleOk ? 'ok' : 'no_module' };
+    } catch(e) {
+      return { msgs: [], diag: 'inner_error:' + (e && e.message ? e.message : '?') };
+    }
+  })()`;
+
+  try {
+    const result: any = await (client.pupPage as any).evaluate(code);
 
     if (result.diag !== 'ok') {
-      log('WARN', `fetchMessagesFromMemory "${chat.name}": ${result.diag} — recuperados ${result.msgs.length} msgs de memoria local`);
+      log('WARN', `fetchMessagesFromMemory "${chat.name}": ${result.diag} — ${result.msgs.length} msgs de memoria local`);
     } else {
-      log('INFO', `fetchMessagesFromMemory "${chat.name}": parche aplicado, ${result.msgs.length} mensajes cargados`);
+      log('INFO', `fetchMessagesFromMemory "${chat.name}": parche OK, ${result.msgs.length} mensajes cargados`);
     }
 
     return (result.msgs as any[]).filter(Boolean).map((m: any) => {
