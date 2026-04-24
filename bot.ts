@@ -162,26 +162,29 @@ export async function startBot() {
   // Limpiar archivos temporales que no estén en la cola antes de iniciar
   cleanupOrphanedTempFiles();
 
-  log('INFO', 'Iniciando motor de WhatsApp Web (Modo Invisible)...');
+  log('INFO', 'Iniciando motor de WhatsApp Web (Modo Offscreen)...');
   botStatus = 'starting';
   currentQrCode = null;
 
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: path.join(DATA_DIR, 'session') }),
     puppeteer: {
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      // CAMBIO CRÍTICO: modo visible para que WA Web inicialice todos sus contextos
+      // (webcBrowserNetworkType, UI observers, etc.). La ventana se posiciona fuera
+      // de la pantalla para que no estorbe visualmente.
+      headless: false,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--window-position=-2000,-2000',  // fuera de pantalla visible
+        '--window-size=400,600',           // ventana pequeña
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars'
+      ],
       timeout: 60000,
       protocolTimeout: 7200000 // 2 horas para evitar timeouts en barridos largos
-    },
-    // Forzar una versión de WhatsApp Web compatible con carga de mensajes históricos.
-    // WhatsApp Web 2026 introdujo cambios que rompen loadEarlierMsgs headless
-    // (requiere UI activa y contextos globales que solo existen en modo visible).
-    // Esta versión de inicios de 2025 aún soporta carga de historial sin UI.
-    webVersionCache: {
-      type: 'remote',
-      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1015901307.html'
-    },
-    webVersion: '2.3000.1015901307'
+    }
   });
 
   client.on('qr', async (qr: string) => {
@@ -204,17 +207,16 @@ export async function startBot() {
     await patchWAWebMessageLoader();
 
     try {
-      log('INFO', 'Esperando 60 segundos para permitir la sincronización inicial de chats (sesión nueva)...');
-      await new Promise(resolve => setTimeout(resolve, 60000));
+      log('INFO', 'Esperando 30 segundos para permitir la sincronización inicial de chats...');
+      await new Promise(resolve => setTimeout(resolve, 30000));
 
       log('INFO', `Obteniendo lista de chats para recuperar mensajes pendientes (esto puede demorar)...`);
       let chats = await client.getChats();
 
       // Si la lista está vacía o muy chica, reintentar con espera adicional
-      // (la sincronización puede tardar más en sesiones nuevas)
       for (let retry = 0; retry < 3 && chats.length < 5; retry++) {
-        log('INFO', `Lista de chats incompleta (${chats.length}). Esperando 30s adicionales y reintentando...`);
-        await new Promise(resolve => setTimeout(resolve, 30000));
+        log('INFO', `Lista de chats incompleta (${chats.length}). Esperando 20s adicionales y reintentando...`);
+        await new Promise(resolve => setTimeout(resolve, 20000));
         chats = await client.getChats();
       }
       log('INFO', `Total de chats detectados: ${chats.length}`);
