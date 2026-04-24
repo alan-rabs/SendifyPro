@@ -172,7 +172,16 @@ export async function startBot() {
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
       timeout: 60000,
       protocolTimeout: 7200000 // 2 horas para evitar timeouts en barridos largos
-    }
+    },
+    // Forzar una versión de WhatsApp Web compatible con carga de mensajes históricos.
+    // WhatsApp Web 2026 introdujo cambios que rompen loadEarlierMsgs headless
+    // (requiere UI activa y contextos globales que solo existen en modo visible).
+    // Esta versión de inicios de 2025 aún soporta carga de historial sin UI.
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1015901307.html'
+    },
+    webVersion: '2.3000.1015901307'
   });
 
   client.on('qr', async (qr: string) => {
