@@ -513,6 +513,124 @@ async function patchWAWebMessageLoader(): Promise<void> {
   }
 }
 
+// Hace click REAL en el chat usando Puppeteer (isTrusted=true).
+// Esto es crítico: los eventos MouseEvent sintéticos creados dentro del browser
+// son ignorados por React/WA Web. Solo los clicks de Puppeteer nativo (o un
+// humano real) disparan los handlers que inicializan los contextos de carga.
+// Retorna true si el click se ejecutó exitosamente.
+async function clickChatInUI(chatName: string): Promise<boolean> {
+  if (!client || !client.pupPage) return false;
+  const page: any = client.pupPage;
+  try {
+    const normalized = (chatName || '').toUpperCase();
+
+    // Paso 1: Intentar localizar el chat en el DOM (con scroll en la lista si no está visible)
+    // Esta función corre en el contexto del browser y retorna un selector único o null.
+    const foundChat = await page.evaluate(async (nameUpper: string) => {
+      function findChatElement() {
+        const titled = document.querySelectorAll('span[title], div[title]');
+        for (let i = 0; i < titled.length; i++) {
+          const el = titled[i] as HTMLElement;
+          const t = el.getAttribute('title') || '';
+          if (t.toUpperCase() === nameUpper) {
+            // Subir hasta encontrar el contenedor clickeable del chat
+            let node: HTMLElement | null = el;
+            for (let up = 0; up < 15 && node; up++) {
+              const role = node.getAttribute ? node.getAttribute('role') : null;
+              const testid = node.getAttribute ? node.getAttribute('data-testid') : null;
+              if (role === 'listitem' || role === 'row' || role === 'gridcell' ||
+                  testid === 'cell-frame-container' || testid === 'chat') {
+                return node;
+              }
+              node = node.parentElement;
+            }
+            return el;
+          }
+        }
+        return null;
+      }
+
+      let chatEl = findChatElement();
+      if (!chatEl) {
+        // Hacer scroll en la lista de chats para encontrarlo
+        const chatList = document.querySelector('[role="grid"]') ||
+            document.querySelector('#pane-side') ||
+            document.querySelector('[data-tab="3"]');
+        if (chatList) {
+          for (let sc = 0; sc < 20 && !chatEl; sc++) {
+            (chatList as HTMLElement).scrollTop += 500;
+            await new Promise((r) => setTimeout(r, 300));
+            chatEl = findChatElement();
+          }
+        }
+      }
+
+      if (!chatEl) return null;
+
+      // Marcar el elemento con un id único para poder referenciarlo desde Puppeteer
+      const marker = '__wwjs_click_target_' + Date.now();
+      chatEl.setAttribute('data-wwjs-click-target', marker);
+      return marker;
+    }, normalized);
+
+    if (!foundChat) {
+      log('WARN', `clickChatInUI: no se encontró el chat "${chatName}" en el DOM tras scroll.`);
+      return false;
+    }
+
+    // Paso 2: Obtener el ElementHandle desde Puppeteer y hacer CLICK REAL
+    const selector = `[data-wwjs-click-target="${foundChat}"]`;
+    const elementHandle: any = await page.$(selector);
+    if (!elementHandle) {
+      log('WARN', `clickChatInUI: ElementHandle nulo tras marcar selector ${selector}`);
+      return false;
+    }
+
+    try {
+      // Scroll para asegurar visibilidad (requerido por Puppeteer)
+      await elementHandle.evaluate((el: any) => {
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+      });
+      await new Promise(r => setTimeout(r, 300));
+
+      // Click REAL: isTrusted=true, dispara handlers de React/WA Web
+      await elementHandle.click();
+      log('INFO', `✅ clickChatInUI: click real en "${chatName}" ejecutado.`);
+    } catch (clickErr: any) {
+      log('WARN', `clickChatInUI: error en click real: ${clickErr.message}`);
+      return false;
+    } finally {
+      try { await elementHandle.dispose(); } catch(_) {}
+    }
+
+    // Paso 3: Esperar a que el chat se abra en la UI y los contextos se inicialicen
+    await new Promise(r => setTimeout(r, 3500));
+
+    // Paso 4: Scroll al tope del panel de mensajes para forzar carga de históricos
+    // (Esto sí puede ser sintético - scrollTop=0 es una asignación de propiedad que
+    // WA Web observa directamente sin necesidad de eventos trusted)
+    try {
+      await page.evaluate(async () => {
+        const msgPane = document.querySelector('[data-testid="conversation-panel-messages"]') ||
+            document.querySelector('#main [role="application"]') ||
+            document.querySelector('#main .copyable-area');
+        if (!msgPane) return;
+        // Múltiples scrolls al tope para ir cargando históricos progresivamente
+        for (let i = 0; i < 20; i++) {
+          (msgPane as HTMLElement).scrollTop = 0;
+          msgPane.dispatchEvent(new Event('scroll', { bubbles: true }));
+          await new Promise(r => setTimeout(r, 500));
+        }
+      });
+    } catch(_) {}
+
+    return true;
+  } catch (e: any) {
+    log('WARN', `clickChatInUI: error general: ${e.message}`);
+    return false;
+  }
+}
+
 // Carga mensajes históricos con loadEarlierMsgs parchado inline.
 // IMPORTANTE: el código se pasa como STRING a pupPage.evaluate para evitar que
 // esbuild/tsx inyecte helpers como __name() que no existen en el contexto del browser.
@@ -526,6 +644,15 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
   if (!client) return [];
   const chatId = chat.id._serialized;
   const chatName = chat.name || chat.formattedTitle || '';
+
+  // Paso 1 CRÍTICO: click REAL en el chat en la UI (Puppeteer nativo).
+  // Esto inicializa todos los contextos de WA Web (webcBrowserNetworkType, UI
+  // observers, msgLoadState activo) que son necesarios para que loadEarlierMsgs
+  // funcione. Sin este click, todas las estrategias internas fallan.
+  const clickOk = await clickChatInUI(chatName);
+  if (!clickOk) {
+    log('WARN', `fetchMessagesFromMemory: click UI falló para "${chatName}". Continuando con estrategias internas (pueden fallar).`);
+  }
 
   const code = `(async function() {
     try {
