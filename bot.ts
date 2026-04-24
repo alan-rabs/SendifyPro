@@ -177,7 +177,7 @@ export async function startBot() {
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--window-position=-2000,-2000',  // fuera de pantalla visible
+                //'--window-position=-2000,-2000',  // fuera de pantalla visible
                 '--window-size=400,600',           // ventana pequeña
                 '--disable-blink-features=AutomationControlled',
                 '--disable-infobars'
@@ -205,6 +205,20 @@ export async function startBot() {
 
         // Aplicar parche de carga histórica antes de cualquier recuperación de mensajes
         await patchWAWebMessageLoader();
+
+        // Cerrar popups que WA Web pueda mostrar al conectarse (ej: "Usar aquí" si hay
+        // otras pestañas abiertas, o avisos de inicio). Esto previene que la UI quede
+        // bloqueada y el bot no pueda interactuar con los chats.
+        await dismissWAPopups();
+
+        // Vigilancia periódica: cada 30s cerrar popups que puedan aparecer mientras corre.
+        // Esto es clave porque WA Web puede mostrar "Usar aquí" en cualquier momento si
+        // detecta que la sesión está activa en otra ventana (p.ej. el usuario abre WA
+        // Web en su navegador normal mientras el bot corre).
+        const popupWatcher = setInterval(() => {
+            dismissWAPopups().catch(() => {});
+        }, 30000);
+        (client as any).__popupWatcher = popupWatcher;
 
         try {
             log('INFO', 'Esperando 30 segundos para permitir la sincronización inicial de chats...');
@@ -513,6 +527,69 @@ async function patchWAWebMessageLoader(): Promise<void> {
     }
 }
 
+// Detecta y cierra popups comunes de WhatsApp Web que bloquean la interacción:
+//  - "Usar aquí / Use Here" (cuando WA detecta la sesión en otra ventana)
+//  - "Tu teléfono no está conectado" con botón para reconectar
+//  - Otros dialogs que aparecen encima del chat y bloquean clicks
+// Se llama antes de cada click crítico para asegurar que la UI es usable.
+async function dismissWAPopups(): Promise<boolean> {
+    if (!client || !client.pupPage) return false;
+    const page: any = client.pupPage;
+
+    try {
+        // Buscar dialogs/popups visibles y marcar el botón principal (si existe)
+        const buttonMarker = await page.evaluate(() => {
+            // Textos conocidos del botón "Usar aquí" en varios idiomas
+            const targetTexts = [
+                'usar aquí', 'use here', 'usar aqui',
+                'click to use whatsapp here', 'use whatsapp here',
+                'open here', 'abrir aquí', 'reconnect', 'reconectar',
+                'continuar', 'continue', 'ok', 'entendido', 'got it'
+            ];
+
+            // Buscar todos los botones y divs clickeables
+            const candidates = document.querySelectorAll('button, [role="button"], div[role="button"]');
+            for (let i = 0; i < candidates.length; i++) {
+                const el = candidates[i] as HTMLElement;
+                const text = (el.textContent || '').trim().toLowerCase();
+                if (!text) continue;
+                // Hacer match si el texto es EXACTO (no parcial, para evitar falsos positivos)
+                for (let j = 0; j < targetTexts.length; j++) {
+                    if (text === targetTexts[j] || text.startsWith(targetTexts[j])) {
+                        // Verificar que el elemento es realmente visible
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {
+                            const marker = '__wwjs_popup_btn_' + Date.now();
+                            el.setAttribute('data-wwjs-popup-btn', marker);
+                            return marker;
+                        }
+                    }
+                }
+            }
+            return null;
+        });
+
+        if (!buttonMarker) return false; // No había popup que cerrar
+
+        // Hacer click REAL en el botón
+        const selector = `[data-wwjs-popup-btn="${buttonMarker}"]`;
+        const btn: any = await page.$(selector);
+        if (!btn) return false;
+
+        try {
+            await btn.click();
+            log('INFO', '🧹 Popup de WhatsApp Web cerrado automáticamente (probable "Usar aquí").');
+            await new Promise(r => setTimeout(r, 1500));
+            return true;
+        } finally {
+            try { await btn.dispose(); } catch(_) {}
+        }
+    } catch (e: any) {
+        log('DEBUG', `dismissWAPopups: ${e.message}`);
+        return false;
+    }
+}
+
 // Hace click REAL en el chat usando Puppeteer (isTrusted=true).
 // Esto es crítico: los eventos MouseEvent sintéticos creados dentro del browser
 // son ignorados por React/WA Web. Solo los clicks de Puppeteer nativo (o un
@@ -525,6 +602,9 @@ async function clickChatInUI(chatName: string, scrollCount: number = 20): Promis
     if (!client || !client.pupPage) return false;
     const page: any = client.pupPage;
     try {
+        // Cerrar cualquier popup que pueda estar bloqueando la UI antes del click
+        await dismissWAPopups();
+
         const normalized = (chatName || '').toUpperCase();
 
         // Optimización: si el chat ya está activo en la UI, skip el click (ahorra 3.5s).
@@ -1261,6 +1341,10 @@ export async function stopBot() {
     log('INFO', 'Deteniendo el bot de WhatsApp...');
     try {
         const oldClient = client;
+        // Limpiar el watcher de popups si está activo
+        if ((oldClient as any).__popupWatcher) {
+            clearInterval((oldClient as any).__popupWatcher);
+        }
         client = null;
         botStatus = 'stopped';
         currentQrCode = null;
