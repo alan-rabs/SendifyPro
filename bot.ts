@@ -730,6 +730,182 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
         }
       }
 
+      // ─── DIAGNÓSTICO ADICIONAL: msgLoadState ─────────────────────────────
+      // Registrar métodos y estado del state machine interno de WA Web moderno.
+      try {
+        var mlsDiag = chatObj.msgs && chatObj.msgs.msgLoadState;
+        if (mlsDiag) {
+          var mlsKeys = [];
+          try { mlsKeys = Object.keys(mlsDiag).slice(0, 15); } catch(_) {}
+          var mlsMethods = [];
+          try {
+            var protoMls = Object.getPrototypeOf(mlsDiag);
+            if (protoMls) {
+              var protoNames = Object.getOwnPropertyNames(protoMls);
+              for (var pn = 0; pn < protoNames.length && mlsMethods.length < 15; pn++) {
+                var nm = protoNames[pn];
+                if (nm !== 'constructor' && typeof mlsDiag[nm] === 'function') mlsMethods.push(nm);
+              }
+            }
+          } catch(_) {}
+          diagnostics.mlsKeys = mlsKeys;
+          diagnostics.mlsMethods = mlsMethods;
+          diagnostics.mlsState = {};
+          for (var si = 0; si < mlsKeys.length; si++) {
+            var sk = mlsKeys[si];
+            try {
+              var sv = mlsDiag[sk];
+              var tv = typeof sv;
+              if (tv === 'boolean' || tv === 'number' || tv === 'string' || sv === null) {
+                diagnostics.mlsState[sk] = sv;
+              }
+            } catch(_) {}
+          }
+        }
+      } catch(_) {}
+
+      // ─── ESTRATEGIA 4: Observer hack (fix clave para WA Web moderno) ─────
+      // WA Web moderno solo carga mensajes cuando hay observadores de UI
+      // (msgLoadState._uiObservers > 0). Si nadie observa, loadEarlierMsgs retorna []
+      // aunque haya mensajes en el servidor. Solución: llamar incObservers() antes
+      // de pedir mensajes y decObservers() al terminar.
+      if (Object.keys(msgMap).length < lim && chatObj.msgs && chatObj.msgs.msgLoadState) {
+        var mlsLoad = chatObj.msgs.msgLoadState;
+        var incUsed = false;
+        try {
+          if (typeof mlsLoad.incObservers === 'function') {
+            mlsLoad.incObservers();
+            incUsed = true;
+            diagnostics.strategiesUsed.push('observers');
+          }
+        } catch(e) {
+          diagnostics.errorsInLoop.push({ iter: 'obs_inc', error: (e && e.message) || String(e) });
+        }
+
+        if (incUsed) {
+          // Pausa para que WA Web registre el observer y empiece a responder
+          await new Promise(function(r) { setTimeout(r, 1500); });
+          addMsgs(chatObj.msgs.getModelsArray());
+
+          var emptyStreakO = 0;
+          for (var o = 0; o < 80 && Object.keys(msgMap).length < lim; o++) {
+            diagnostics.iterations++;
+            var prevO = Object.keys(msgMap).length;
+            var errO = null;
+            try {
+              if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
+              if (convMsgs && convMsgs.loadEarlierMsgs) {
+                var loadedO = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+                addMsgs(loadedO);
+              }
+            } catch(e) {
+              errO = (e && e.message) || String(e);
+              diagnostics.errorsInLoop.push({ iter: 'obs_' + o, error: errO });
+            }
+            addMsgs(chatObj.msgs.getModelsArray());
+
+            if (o < 3) {
+              diagnostics.perIterFirst5.push({
+                iter: 'obs_' + o,
+                loadedRet: -1,
+                addedFromLoaded: 0,
+                addedFromCollection: 0,
+                totalBefore: prevO,
+                totalAfter: Object.keys(msgMap).length,
+                noEarlierFlag: !!(chatObj.msgs && chatObj.msgs.noEarlierMsgs),
+                error: errO
+              });
+            }
+
+            var gainedO = Object.keys(msgMap).length - prevO;
+            if (gainedO === 0) {
+              emptyStreakO++;
+              if (emptyStreakO >= 5) break;
+              await new Promise(function(r) { setTimeout(r, 800); });
+            } else {
+              emptyStreakO = 0;
+              await new Promise(function(r) { setTimeout(r, 400); });
+            }
+          }
+
+          // Siempre decrementar observadores (evitar leak)
+          try {
+            if (typeof mlsLoad.decObservers === 'function') mlsLoad.decObservers();
+          } catch(_) {}
+
+          diagnostics.uiObserversAfter = mlsLoad._uiObservers;
+        }
+      }
+
+      // ─── ESTRATEGIA 5: Activación UI (fallback si incObservers no existe) ─
+      if (Object.keys(msgMap).length < lim && window.Store && window.Store.Cmd) {
+        diagnostics.strategiesUsed.push('ui');
+        var prevActive = null;
+        try { prevActive = (window.Store.Cmd.activeChat) || null; } catch(_) {}
+
+        var opened = false;
+        try {
+          if (typeof window.Store.Cmd.openChatAt === 'function') {
+            try { await window.Store.Cmd.openChatAt(chatObj, { collapseLabel: 'latest' }); opened = true; }
+            catch(_) {
+              try { await window.Store.Cmd.openChatAt(chatObj); opened = true; } catch(_) {}
+            }
+          }
+          if (!opened && typeof window.Store.Cmd.openChatBottom === 'function') {
+            try { await window.Store.Cmd.openChatBottom(chatObj); opened = true; } catch(_) {}
+          }
+          if (!opened && typeof window.Store.Cmd.openChat === 'function') {
+            try { await window.Store.Cmd.openChat(chatObj); opened = true; } catch(_) {}
+          }
+        } catch(e) {
+          diagnostics.errorsInLoop.push({ iter: 'ui_open', error: (e && e.message) || String(e) });
+        }
+        diagnostics.uiOpened = opened;
+
+        if (opened) {
+          await new Promise(function(r) { setTimeout(r, 2500); });
+          addMsgs(chatObj.msgs.getModelsArray());
+
+          var emptyStreak5 = 0;
+          for (var u = 0; u < 80 && Object.keys(msgMap).length < lim; u++) {
+            diagnostics.iterations++;
+            var prevU = Object.keys(msgMap).length;
+            var errU = null;
+            try {
+              if (chatObj.msgs) chatObj.msgs.noEarlierMsgs = false;
+              if (convMsgs && convMsgs.loadEarlierMsgs) {
+                var loadedU = await convMsgs.loadEarlierMsgs(chatObj, chatObj.msgs);
+                addMsgs(loadedU);
+              }
+            } catch(e) {
+              errU = (e && e.message) || String(e);
+              diagnostics.errorsInLoop.push({ iter: 'ui_' + u, error: errU });
+            }
+            addMsgs(chatObj.msgs.getModelsArray());
+
+            var gainedU = Object.keys(msgMap).length - prevU;
+            if (gainedU === 0) {
+              emptyStreak5++;
+              if (emptyStreak5 >= 5) break;
+              await new Promise(function(r) { setTimeout(r, 800); });
+            } else {
+              emptyStreak5 = 0;
+              await new Promise(function(r) { setTimeout(r, 400); });
+            }
+          }
+
+          try {
+            if (prevActive && prevActive !== chatObj) {
+              if (typeof window.Store.Cmd.openChatAt === 'function') {
+                await window.Store.Cmd.openChatAt(prevActive);
+              } else if (typeof window.Store.Cmd.openChat === 'function') {
+                await window.Store.Cmd.openChat(prevActive);
+              }
+            }
+          } catch(_) {}
+        }
+      }
+
       // Ordenar por timestamp y limitar
       var allMsgs = [];
       for (var k in msgMap) { if (msgMap.hasOwnProperty(k)) allMsgs.push(msgMap[k]); }
@@ -765,7 +941,11 @@ async function fetchMessagesFromMemory(chat: any, limit: number): Promise<any[]>
       if (!(global as any).__diagLoggedFor[chat.name]) {
         (global as any).__diagLoggedFor[chat.name] = true;
         const level = result.msgs.length < 2 && limit > 2 ? 'WARN' : 'INFO';
-        log(level, `[DIAG ${chat.name}] iniCache=${d.initialCount} loaders=[${(d.availableLoaders || []).join(',')}] estrategias=[${(d.strategiesUsed || []).join(',')}] iters=${d.iterations} vacías=${d.emptyIterations} final=${d.finalCount} collKeys=${JSON.stringify((d.msgCollectionKeys || []).slice(0, 10))}`);
+        log(level, `[DIAG ${chat.name}] iniCache=${d.initialCount} loaders=[${(d.availableLoaders || []).join(',')}] estrategias=[${(d.strategiesUsed || []).join(',')}] iters=${d.iterations} vacías=${d.emptyIterations} final=${d.finalCount} uiOpened=${d.uiOpened === undefined ? 'n/a' : d.uiOpened} uiObsAfter=${d.uiObserversAfter === undefined ? 'n/a' : d.uiObserversAfter}`);
+        log(level, `[DIAG ${chat.name}] collKeys=${JSON.stringify((d.msgCollectionKeys || []).slice(0, 10))}`);
+        if (d.mlsMethods || d.mlsKeys) {
+          log(level, `[DIAG ${chat.name}] mlsMethods=${JSON.stringify(d.mlsMethods || [])} mlsKeys=${JSON.stringify(d.mlsKeys || [])} mlsState=${JSON.stringify(d.mlsState || {}).slice(0, 300)}`);
+        }
         if (d.perIterFirst5 && d.perIterFirst5.length) {
           for (const it of d.perIterFirst5) {
             log(level, `[DIAG ${chat.name}] iter=${it.iter} loadedRet=${it.loadedRet} +loaded=${it.addedFromLoaded} +coll=${it.addedFromCollection} total=${it.totalBefore}->${it.totalAfter} noEarlier=${it.noEarlierFlag}${it.error ? ' ERR='+it.error : ''}`);
