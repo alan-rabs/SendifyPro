@@ -8,6 +8,10 @@ import AdmZip from "adm-zip";
 import os from "os";
 import { startBot, stopBot, botStatus, currentQrCode, logs, getStats, getConfig, saveConfig, generateCustomCsvFromDb } from "./bot.js";
 import * as db from "./db.js";
+// FIX TZ: helpers de zona horaria centralizados.
+// Antes el servidor usaba now.getHours() (TZ del sistema) y new Date().toISOString()
+// para fechas, lo cual fallaba si el servidor corría en TZ distinta a México.
+import { getLocalHHMM, getLocalDateParts } from "./timezone.js";
 
 // Global error handlers to prevent server crashes
 process.on('uncaughtException', (err) => {
@@ -483,20 +487,23 @@ async function startServer() {
       const config = getConfig();
       if (!config.autoUpdateCheckEnabled || !config.githubRepo) return;
 
-      const now = new Date();
-      // Adjust for Mexico City timezone if needed, or use local server time
-      const currentHour = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      // FIX TZ: hora actual en TZ centralizada (México por defecto), no del sistema.
+      // Antes usaba now.getHours() que dependía de la TZ del SO; en un VPS gringo
+      // el horario configurado se disparaba 6 horas tarde.
+      const currentHour = getLocalHHMM();
       const targetHour = config.autoUpdateHour || '03:00';
 
       // Only check at the specific hour and minute
       if (currentHour !== targetHour) return;
 
-      // Check frequency
-      const lastCheck = config.lastAutoUpdateCheck ? new Date(config.lastAutoUpdateCheck) : new Date(0);
-      const daysSinceLastCheck = Math.floor((now.getTime() - lastCheck.getTime()) / (1000 * 60 * 60 * 24));
-      
-      // If it already ran today, don't run again
-      if (now.getDate() === lastCheck.getDate() && now.getMonth() === lastCheck.getMonth() && now.getFullYear() === lastCheck.getFullYear()) {
+      // Check frequency — comparamos día/mes/año en TZ México
+      const nowParts = getLocalDateParts();
+      const lastCheckRaw = config.lastAutoUpdateCheck ? new Date(config.lastAutoUpdateCheck) : new Date(0);
+      const lastCheckParts = getLocalDateParts(lastCheckRaw);
+      const daysSinceLastCheck = Math.floor((Date.now() - lastCheckRaw.getTime()) / (1000 * 60 * 60 * 24));
+
+      // If it already ran today (TZ México), don't run again
+      if (nowParts.day === lastCheckParts.day && nowParts.month === lastCheckParts.month && nowParts.year === lastCheckParts.year) {
          return;
       }
 
@@ -509,7 +516,7 @@ async function startServer() {
       if (!shouldCheck && config.lastAutoUpdateCheck) return;
 
       console.log("[AutoUpdate] Checking for updates...");
-      config.lastAutoUpdateCheck = now.toISOString();
+      config.lastAutoUpdateCheck = new Date().toISOString();
       saveConfig(config);
 
       try {

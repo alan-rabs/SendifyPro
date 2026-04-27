@@ -10,26 +10,32 @@ import * as XLSX from 'xlsx';
 
 import { PDFParse } from 'pdf-parse';
 
+// Helpers de zona horaria centralizados.
+// IMPORTANTE: nunca usar new Date().toISOString().split('T')[0] para "fecha de hoy"
+// — eso devuelve la fecha UTC, no la fecha local de México. Usar getLocalDateStr().
+import {
+    TIMEZONE,
+    LOCALE,
+    getLocalDateStr,
+    getLocalTimestamp,
+    getLocalHHMM,
+    getLocalDateParts,
+    parseLocalDate,
+    parseLocalDateEndOfDay,
+    formatUnixTimestamp,
+    unixTimestampToLocalDateStr
+} from './timezone.js';
+
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 
 // Run migration
 db.migrateData();
 
-function getLocalDateStr() {
-    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City', year: 'numeric', month: '2-digit', day: '2-digit' });
-    return formatter.format(new Date());
-}
-
-
-function getLocalTimestamp() {
-    return new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-}
-
 export function logAudit(phoneNumber: string, actionType: string, nss: string, curp: string, message: string = '', error: string = '', originalTimestamp?: number) {
     if (actionType === 'SUCCESS_TEXT') return; // Ignorar SUCCESS_TEXT en el CSV
 
     const processingTimestamp = getLocalTimestamp();
-    const timestamp = originalTimestamp ? new Date(originalTimestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }) : processingTimestamp;
+    const timestamp = originalTimestamp ? formatUnixTimestamp(originalTimestamp) : processingTimestamp;
 
     const isSweep = (global as any).isValidationSweep;
     const messageId = (global as any).sweepMessageId || '';
@@ -82,7 +88,10 @@ const DEFAULT_CONFIG = {
     chatConfigs: [],
     initialFetchLimit: 50,
     initialFetchMode: 'limit', // 'limit' or 'date'
-    initialFetchDate: new Date().toISOString().split('T')[0] // Default to today
+    // FIX TZ: getLocalDateStr() devuelve la fecha de hoy en México, no en UTC.
+    // Antes usaba new Date().toISOString().split('T')[0] que adelantaba un día
+    // a partir de las 18:00 hora México.
+    initialFetchDate: getLocalDateStr()
 };
 
 let config: any = db.getConfig() || DEFAULT_CONFIG;
@@ -249,20 +258,15 @@ export async function startBot() {
                     try {
                         let messages = [];
                         if (config.initialFetchMode === 'date') {
-                            // FIX zona horaria: parsear la fecha como LOCAL, no UTC.
-                            // new Date("2026-04-23") se parsea como UTC midnight, que en México (UTC-6)
-                            // se convierte en el día anterior 18:00 local. Luego setHours(0,0,0,0) retrocede
-                            // un día más y terminamos filtrando desde el día anterior al solicitado.
-                            // Solución: construir la fecha con los componentes year/month/day en hora local.
-                            const dateStr = config.initialFetchDate || new Date().toISOString().split('T')[0];
-                            const parts = String(dateStr).split('-');
-                            const targetDate = parts.length === 3
-                                ? new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 0, 0, 0, 0)
-                                : new Date(dateStr);
-                            targetDate.setHours(0, 0, 0, 0);
+                            // FIX zona horaria (centralizado): parseLocalDate parsea la cadena
+                            // "YYYY-MM-DD" como medianoche LOCAL de México, evitando el bug
+                            // de new Date("2026-04-23") que la interpreta como UTC midnight
+                            // (= día anterior 18:00 en México).
+                            const dateStr = config.initialFetchDate || getLocalDateStr();
+                            const targetDate = parseLocalDate(dateStr) || new Date();
                             const targetTimestamp = Math.floor(targetDate.getTime() / 1000);
 
-                            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${targetDate.toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })} (timestamp ${targetTimestamp})...`);
+                            log('INFO', `Chat "${chatConf.targetContact}" encontrado. Buscando mensajes desde ${getLocalTimestamp(targetDate)} (timestamp ${targetTimestamp})...`);
 
                             let currentLimit = 100;
                             let reachedTargetDate = false;
@@ -283,7 +287,7 @@ export async function startBot() {
                                     if (oldestMsg.timestamp <= targetTimestamp) {
                                         reachedTargetDate = true;
                                     } else {
-                                        const oldestDate = new Date(oldestMsg.timestamp * 1000).toLocaleDateString();
+                                        const oldestDate = unixTimestampToLocalDateStr(oldestMsg.timestamp);
                                         log('INFO', `Mensaje más antiguo hasta ahora: ${oldestDate}. Aumentando búsqueda a ${currentLimit + 200} mensajes...`);
                                         currentLimit += 200;
                                         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -302,8 +306,8 @@ export async function startBot() {
 
                             messages = messages.filter((m: any) => m.timestamp >= targetTimestamp);
                             if (messages.length > 0) {
-                                const oldest = new Date(messages[0].timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-                                const newest = new Date(messages[messages.length - 1].timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+                                const oldest = formatUnixTimestamp(messages[0].timestamp);
+                                const newest = formatUnixTimestamp(messages[messages.length - 1].timestamp);
                                 log('INFO', `Se encontraron ${messages.length} mensajes desde la fecha especificada (rango: ${oldest} → ${newest}).`);
                             } else {
                                 log('INFO', `Se encontraron 0 mensajes desde la fecha especificada.`);
@@ -1275,7 +1279,7 @@ async function processMessage(msg: any): Promise<ProcessResult> {
                 if (processingError) {
                     db.incrementStat('errorsDetected');
                     db.addRecentError({
-                        timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+                        timestamp: getLocalTimestamp(),
                         action_type: rule.name,
                         error: `Fallo en acción de regla: ${rule.name}`
                     });
@@ -1334,15 +1338,25 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
         let totalFalsePositives = 0;
         (global as any).sweepRecoveredItems = [];
 
-        const [tYear, tMonth, tDay] = targetDate.split('-').map(Number);
-        // Start of the target day
-        const startOfDay = new Date(tYear, tMonth - 1, tDay, 0, 0, 0).getTime() / 1000;
+        // FIX TZ: parseLocalDate construye medianoche LOCAL de México sin
+        // depender de la TZ del sistema operativo. Antes, new Date(year, month, day)
+        // funcionaba sólo si la PC estaba en México; ahora es robusto en cualquier TZ.
+        const startDate = parseLocalDate(targetDate);
+        if (!startDate) {
+            log('ERROR', `Fecha inicial inválida: ${targetDate}`);
+            return { success: false, message: `Fecha inicial inválida: ${targetDate}` };
+        }
+        const startOfDay = Math.floor(startDate.getTime() / 1000);
 
         // End of the target day (or end date)
         let endOfDay = startOfDay + 86400;
         if (endDate) {
-            const [eYear, eMonth, eDay] = endDate.split('-').map(Number);
-            endOfDay = new Date(eYear, eMonth - 1, eDay, 23, 59, 59).getTime() / 1000;
+            const endDateObj = parseLocalDateEndOfDay(endDate);
+            if (!endDateObj) {
+                log('ERROR', `Fecha final inválida: ${endDate}`);
+                return { success: false, message: `Fecha final inválida: ${endDate}` };
+            }
+            endOfDay = Math.floor(endDateObj.getTime() / 1000);
         }
 
         for (const chat of chats) {
@@ -1382,7 +1396,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
                     if (oldestMsg.timestamp <= startOfDay) {
                         reachedTargetDate = true;
                     } else {
-                        const oldestDate = new Date(oldestMsg.timestamp * 1000).toLocaleDateString();
+                        const oldestDate = unixTimestampToLocalDateStr(oldestMsg.timestamp);
                         log('INFO', `Barrido: Mensaje más antiguo: ${oldestDate}. Aumentando límite a ${currentLimit + 200}...`);
                         currentLimit += 200;
                         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1458,7 +1472,7 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 
                     if (shouldBeProcessed && !isMarkedProcessed) {
                         // Found a missing message!
-                        log('WARN', `Barrido: Se encontró un mensaje no procesado en ${chat.name} del ${new Date(msg.timestamp * 1000).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })}`);
+                        log('WARN', `Barrido: Se encontró un mensaje no procesado en ${chat.name} del ${formatUnixTimestamp(msg.timestamp)}`);
                         totalMissingFound++;
 
                         // Process it now, marking it as a sweep execution
@@ -1643,7 +1657,7 @@ async function processEmailQueue() {
             log('ERROR', `❌ Error enviando lote a ${first.to}`);
             db.incrementStat('errorsDetected');
             db.addRecentError({
-                timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+                timestamp: getLocalTimestamp(),
                 action_type: 'Envío de Lote',
                 error: `Fallo al enviar lote de ${items.length} correos a ${first.to}`
             });
@@ -1666,8 +1680,8 @@ let lastScheduleRun = '';
 setInterval(() => {
     if (!config.emailBatchingEnabled) return;
 
-    const now = new Date();
-    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    // FIX TZ: hora actual en México (no del sistema operativo)
+    const timeStr = getLocalHHMM();
 
     const schedules = config.emailSchedules || [];
     const limit = config.emailBatchLimit || 20;
@@ -1695,8 +1709,8 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
         return false;
     }
 
-    // Check email limits
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mexico_City' }).format(new Date());
+    // Check email limits — usar fecha de hoy en TZ México (no UTC)
+    const today = getLocalDateStr();
     if (config.lastEmailDate !== today) {
         config.emailsSentToday = 0;
         config.lastEmailDate = today;
@@ -1790,7 +1804,7 @@ async function sendEmail(subject: string, text: string, attachments: { filename:
         log('ERROR', errorMsg);
         db.setMetadata('last_email_error', errorMsg);
         db.addRecentError({
-            timestamp: new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }),
+            timestamp: getLocalTimestamp(),
             action_type: 'SMTP Error',
             error: errorMsg
         });
@@ -1840,60 +1854,84 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
     const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
     if (logs.length === 0) return null;
 
-    let start = new Date();
-    let end = new Date();
+    // FIX TZ: todos los rangos se calculan respecto a la fecha actual de México
+    // (no del sistema operativo). Esto evita que en un VPS con TZ distinta el
+    // reporte "de hoy" cubra un día equivocado.
+    let start: Date;
+    let end: Date;
 
     if (typeof timeRange === 'object' && timeRange !== null) {
-        // Parse custom dates (assuming YYYY-MM-DD)
-        const [startYear, startMonth, startDay] = timeRange.start.split('-').map(Number);
-        const [endYear, endMonth, endDay] = timeRange.end.split('-').map(Number);
-        start = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0);
-        end = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999);
+        // Rango personalizado YYYY-MM-DD: medianoche a 23:59:59 hora México
+        const s = parseLocalDate(timeRange.start);
+        const e = parseLocalDateEndOfDay(timeRange.end);
+        if (!s || !e) return null;
+        start = s;
+        end = e;
     } else {
+        // Rango relativo respecto a "hoy" en México
+        const today = getLocalDateParts();
+        const todayStr = `${today.year}-${String(today.month).padStart(2, '0')}-${String(today.day).padStart(2, '0')}`;
+
+        // Helpers locales para sumar/restar días manteniendo TZ México
+        const addDays = (dateStr: string, days: number): string => {
+            const d = parseLocalDate(dateStr);
+            if (!d) return dateStr;
+            const newD = new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+            return getLocalDateStr(newD);
+        };
+
         switch (timeRange) {
-            case 'today':
-                start.setHours(0, 0, 0, 0);
-                end.setHours(23, 59, 59, 999);
+            case 'today': {
+                start = parseLocalDate(todayStr)!;
+                end = parseLocalDateEndOfDay(todayStr)!;
                 break;
-            case 'yesterday':
-                start.setDate(start.getDate() - 1);
-                start.setHours(0, 0, 0, 0);
-                end.setDate(end.getDate() - 1);
-                end.setHours(23, 59, 59, 999);
+            }
+            case 'yesterday': {
+                const ystr = addDays(todayStr, -1);
+                start = parseLocalDate(ystr)!;
+                end = parseLocalDateEndOfDay(ystr)!;
                 break;
-            case 'this_week':
-                const day = start.getDay();
-                const diff = start.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
-                start.setDate(diff);
-                start.setHours(0, 0, 0, 0);
-                end.setHours(23, 59, 59, 999);
+            }
+            case 'this_week': {
+                // Semana inicia en lunes. dayOfWeek: 0=domingo, 1=lunes...
+                const dow = today.dayOfWeek;
+                const daysToMonday = dow === 0 ? -6 : 1 - dow;
+                const monday = addDays(todayStr, daysToMonday);
+                start = parseLocalDate(monday)!;
+                end = parseLocalDateEndOfDay(todayStr)!;
                 break;
-            case 'last_week':
-                const lastWeekDay = start.getDay();
-                const lastWeekDiff = start.getDate() - lastWeekDay + (lastWeekDay === 0 ? -6 : 1) - 7;
-                start.setDate(lastWeekDiff);
-                start.setHours(0, 0, 0, 0);
-                end = new Date(start);
-                end.setDate(end.getDate() + 6);
-                end.setHours(23, 59, 59, 999);
+            }
+            case 'last_week': {
+                const dow = today.dayOfWeek;
+                const daysToMonday = dow === 0 ? -6 : 1 - dow;
+                const lastMonday = addDays(todayStr, daysToMonday - 7);
+                const lastSunday = addDays(lastMonday, 6);
+                start = parseLocalDate(lastMonday)!;
+                end = parseLocalDateEndOfDay(lastSunday)!;
                 break;
-            case 'this_month':
-                start.setDate(1);
-                start.setHours(0, 0, 0, 0);
-                end.setHours(23, 59, 59, 999);
+            }
+            case 'this_month': {
+                const firstOfMonth = `${today.year}-${String(today.month).padStart(2, '0')}-01`;
+                start = parseLocalDate(firstOfMonth)!;
+                end = parseLocalDateEndOfDay(todayStr)!;
                 break;
-            case 'last_month':
-                start.setMonth(start.getMonth() - 1);
-                start.setDate(1);
-                start.setHours(0, 0, 0, 0);
-                end = new Date(start);
-                end.setMonth(end.getMonth() + 1);
-                end.setDate(0);
-                end.setHours(23, 59, 59, 999);
+            }
+            case 'last_month': {
+                const lastMonthYear = today.month === 1 ? today.year - 1 : today.year;
+                const lastMonth = today.month === 1 ? 12 : today.month - 1;
+                const firstOfLastMonth = `${lastMonthYear}-${String(lastMonth).padStart(2, '0')}-01`;
+                // Último día del mes anterior = día 0 del mes siguiente al "anterior"
+                // Más simple: día anterior al primero del mes actual
+                const lastDayObj = new Date(parseLocalDate(`${today.year}-${String(today.month).padStart(2, '0')}-01`)!.getTime() - 1);
+                const lastDayStr = getLocalDateStr(lastDayObj);
+                start = parseLocalDate(firstOfLastMonth)!;
+                end = parseLocalDateEndOfDay(lastDayStr)!;
                 break;
-            default:
-                start.setHours(0, 0, 0, 0);
-                end.setHours(23, 59, 59, 999);
+            }
+            default: {
+                start = parseLocalDate(todayStr)!;
+                end = parseLocalDateEndOfDay(todayStr)!;
+            }
         }
     }
 
@@ -1904,7 +1942,8 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
 
         let logDate;
         try {
-            // log.timestamp is usually "DD/MM/YYYY, HH:mm:ss" or "DD/MM/YYYY, HH:mm:ss a.m."
+            // log.timestamp viene como "DD/MM/YYYY, HH:mm:ss" o "DD/MM/YYYY, HH:mm:ss a.m."
+            // (formato es-MX). Lo convertimos a "YYYY-MM-DD" + hora para usar parseLocalDate.
             const parts = log.timestamp.split(/[, ]+/);
             const dateParts = parts[0].split('/');
             if (dateParts.length === 3) {
@@ -1914,15 +1953,19 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
                 if (isPM && hours < 12) hours += 12;
                 if (isAM && hours === 12) hours = 0;
 
-                // Parse as local time, not UTC
-                logDate = new Date(
-                    parseInt(dateParts[2]),
-                    parseInt(dateParts[1]) - 1,
-                    parseInt(dateParts[0]),
-                    hours,
-                    parts[1] ? parseInt(parts[1].split(':')[1]) : 0,
-                    parts[1] ? parseInt(parts[1].split(':')[2]) : 0
-                );
+                const minutes = parts[1] ? parseInt(parts[1].split(':')[1]) || 0 : 0;
+                const seconds = parts[1] ? parseInt(parts[1].split(':')[2]) || 0 : 0;
+
+                // FIX TZ: construir el Date como medianoche local de México y sumar
+                // las horas/minutos/segundos. Así start/end y logDate están en la
+                // misma referencia temporal y la comparación es correcta.
+                const dayStr = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
+                const dayStart = parseLocalDate(dayStr);
+                if (dayStart) {
+                    logDate = new Date(dayStart.getTime() + (hours * 3600 + minutes * 60 + seconds) * 1000);
+                } else {
+                    logDate = new Date(log.timestamp);
+                }
             } else {
                 logDate = new Date(log.timestamp);
             }
@@ -2002,11 +2045,12 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
 
 // Programar tareas para reportes y plantillas personalizadas
 setInterval(async () => {
-    const nowStr = new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City', hour12: false, hour: '2-digit', minute: '2-digit' });
-    // nowStr might be "24:00" instead of "00:00" in some environments, so let's parse it safely
-    const timeStr = nowStr.replace('24:', '00:');
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
+    // FIX TZ: usar helpers centralizados. Antes se construía un Date "fake" haciendo
+    // new Date(new Date().toLocaleString(...)) que es frágil y depende de cómo
+    // el navegador parsee el string formateado (varía entre versiones de Node).
+    const timeStr = getLocalHHMM();
     const dateStr = getLocalDateStr();
+    const localParts = getLocalDateParts();
 
     // 1. Reporte Global (Email)
     const emailSchedule = config.auditEmailSchedule || '23:59';
@@ -2058,8 +2102,8 @@ setInterval(async () => {
 
                 const freq = template.frequency || 'daily';
                 let shouldRun = false;
-                const dayOfWeek = now.getDay();
-                const dayOfMonth = now.getDate();
+                const dayOfWeek = localParts.dayOfWeek;
+                const dayOfMonth = localParts.day;
 
                 if (freq === 'daily') {
                     shouldRun = true;
@@ -2116,8 +2160,8 @@ setInterval(async () => {
             // Check frequency
             const freq = config.validationSweepFrequency || 'daily';
             let shouldRunSweep = false;
-            const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday
-            const dayOfMonth = now.getDate();
+            const dayOfWeek = localParts.dayOfWeek; // 0 = Sunday, 1 = Monday
+            const dayOfMonth = localParts.day;
 
             if (freq === 'daily') {
                 shouldRunSweep = true;
@@ -2131,19 +2175,26 @@ setInterval(async () => {
                 (global as any).lastValidationSweep = sweepKey;
                 log('INFO', `Iniciando tarea programada: Barrido de Validación (${freq})...`);
 
-                let targetDate = new Date().toISOString().split('T')[0];
+                // FIX TZ (Bug crítico): antes esto usaba new Date().toISOString().split('T')[0]
+                // que devuelve la fecha UTC. Si el barrido programado corría a las 23:50
+                // hora México, ya era el día siguiente en UTC y procesaba la fecha equivocada.
+                let targetDate = dateStr; // dateStr ya es la fecha de hoy en México
                 let endDate: string | undefined = undefined;
 
                 if (freq === 'weekly') {
-                    const lastWeek = new Date();
-                    lastWeek.setDate(lastWeek.getDate() - 7);
-                    targetDate = lastWeek.toISOString().split('T')[0];
-                    endDate = new Date().toISOString().split('T')[0];
+                    // Hace 7 días en TZ México
+                    const todayDate = parseLocalDate(dateStr);
+                    if (todayDate) {
+                        const weekAgo = new Date(todayDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+                        targetDate = getLocalDateStr(weekAgo);
+                    }
+                    endDate = dateStr;
                 } else if (freq === 'monthly') {
-                    const lastMonth = new Date();
-                    lastMonth.setMonth(lastMonth.getMonth() - 1);
-                    targetDate = lastMonth.toISOString().split('T')[0];
-                    endDate = new Date().toISOString().split('T')[0];
+                    // Hace ~30 días: restamos 1 mes manteniendo TZ México
+                    const lastMonthYear = localParts.month === 1 ? localParts.year - 1 : localParts.year;
+                    const lastMonth = localParts.month === 1 ? 12 : localParts.month - 1;
+                    targetDate = `${lastMonthYear}-${String(lastMonth).padStart(2, '0')}-${String(localParts.day).padStart(2, '0')}`;
+                    endDate = dateStr;
                 }
 
                 try {
@@ -2194,10 +2245,10 @@ setInterval(async () => {
 
 }, 60000); // Revisar cada minuto
 
-// Reiniciar estadísticas diarias a medianoche
+// Reiniciar estadísticas diarias a medianoche (en TZ centralizada)
 cron.schedule('0 0 * * *', () => {
     log('INFO', 'Ejecutando reinicio de estadísticas diarias...');
     db.resetDailyStats();
 }, {
-    timezone: "America/Mexico_City"
+    timezone: TIMEZONE
 });

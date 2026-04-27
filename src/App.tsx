@@ -221,6 +221,24 @@ const StatCard = ({ label, value, icon: Icon, colorClass, children, isExpanded }
   </div>
 );
 
+// FIX TZ (Bug crítico de filtros de auditoría):
+// `new Date().toISOString().split('T')[0]` devuelve la fecha en UTC, no local.
+// En México (UTC-6), si abres la app después de las 18:00, la fecha "de hoy"
+// que se inicializa en los filtros corresponde al día siguiente, por lo que
+// los registros del día actual no aparecen al filtrar.
+//
+// getLocalDateStrMX devuelve "YYYY-MM-DD" en zona horaria de México siempre,
+// usando la API estándar Intl.DateTimeFormat.
+function getLocalDateStrMX(date: Date = new Date()): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Mexico_City',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  return formatter.format(date);
+}
+
 export default function App() {
   const [status, setStatus] = useState<BotStatus | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -235,8 +253,11 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const hasInitializedSidebar = useRef(false);
 
-  const [statsStartDate, setStatsStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [statsEndDate, setStatsEndDate] = useState(new Date().toISOString().split('T')[0]);
+  // FIX TZ: usar fecha de México, no UTC. Antes esto causaba el bug donde,
+  // al abrir auditoría después de las 18:00 hora México, el filtro "hoy"
+  // pedía la fecha de mañana y no mostraba los registros del día.
+  const [statsStartDate, setStatsStartDate] = useState(getLocalDateStrMX());
+  const [statsEndDate, setStatsEndDate] = useState(getLocalDateStrMX());
   const [auditStats, setAuditStats] = useState<{total: number, email: number, whatsapp: number} | null>(null);
   const [showClearAuditModal, setShowClearAuditModal] = useState(false);
   const [isClearingAudit, setIsClearingAudit] = useState(false);
@@ -246,8 +267,9 @@ export default function App() {
   const [pendingTab, setPendingTab] = useState<string | null>(null);
   const [showTemplateDownloadModal, setShowTemplateDownloadModal] = useState(false);
   const [selectedTemplateForDownload, setSelectedTemplateForDownload] = useState<AuditTemplate | null>(null);
-  const [templateDownloadStartDate, setTemplateDownloadStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [templateDownloadEndDate, setTemplateDownloadEndDate] = useState(new Date().toISOString().split('T')[0]);
+  // FIX TZ: igual que arriba, fecha de México no UTC
+  const [templateDownloadStartDate, setTemplateDownloadStartDate] = useState(getLocalDateStrMX());
+  const [templateDownloadEndDate, setTemplateDownloadEndDate] = useState(getLocalDateStrMX());
   const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
 
   const fetchStats = useCallback(async () => {
@@ -611,7 +633,7 @@ export default function App() {
       const url = window.URL.createObjectURL(blob);
       const downloadAnchorNode = document.createElement('a');
       downloadAnchorNode.setAttribute('href', url);
-      downloadAnchorNode.setAttribute('download', `ramdia_backup_${new Date().toISOString().split('T')[0]}.json`);
+      downloadAnchorNode.setAttribute('download', `ramdia_backup_${getLocalDateStrMX()}.json`);
       document.body.appendChild(downloadAnchorNode);
       downloadAnchorNode.click();
       window.URL.revokeObjectURL(url);
@@ -1583,7 +1605,7 @@ export default function App() {
                             </div>
                             <input 
                               type="date" 
-                              value={config?.initialFetchDate || new Date().toISOString().split('T')[0]} 
+                              value={config?.initialFetchDate || getLocalDateStrMX()} 
                               onChange={e => config && setConfig({...config, initialFetchDate: e.target.value})}
                               className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:border-zinc-500 outline-none transition-all text-right"
                             />
@@ -1687,7 +1709,7 @@ export default function App() {
                               <input 
                                 type="date" 
                                 id="manualSweepDate"
-                                defaultValue={new Date().toISOString().split('T')[0]}
+                                defaultValue={getLocalDateStrMX()}
                                 className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:border-purple-500 outline-none transition-all"
                               />
                             </div>

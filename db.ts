@@ -1,6 +1,10 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+// Importar helper centralizado para fecha local de México (no UTC).
+// Antes db.ts usaba new Date().toISOString().split('T')[0] que devuelve fecha UTC,
+// causando que el reset de stats diarias se hiciera con la fecha equivocada.
+import { getLocalDateStr } from './timezone.js';
 
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 const DB_FILE = path.join(DATA_DIR, 'sendify.db');
@@ -357,7 +361,8 @@ export function resetDailyStats() {
   const config = getConfig();
   if (config) {
     config.emailsSentToday = 0;
-    config.lastEmailDate = new Date().toISOString().split('T')[0];
+    // FIX TZ: fecha de hoy en México (no UTC). Antes usaba toISOString().split('T')[0].
+    config.lastEmailDate = getLocalDateStr();
     setConfig(config);
   }
 }
