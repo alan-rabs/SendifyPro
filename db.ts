@@ -4,7 +4,7 @@ import fs from 'fs';
 // Importar helper centralizado para fecha local de México (no UTC).
 // Antes db.ts usaba new Date().toISOString().split('T')[0] que devuelve fecha UTC,
 // causando que el reset de stats diarias se hiciera con la fecha equivocada.
-import { getLocalDateStr } from './timezone.js';
+import { getLocalDateStr, parseLocalDate } from './timezone.js';
 
 const DATA_DIR = path.join(process.cwd(), 'bot_data');
 const DB_FILE = path.join(DATA_DIR, 'sendify.db');
@@ -12,6 +12,59 @@ const DB_FILE = path.join(DATA_DIR, 'sendify.db');
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// Convierte un timestamp con formato español de México a segundos UNIX.
+// Acepta formatos tipo "27/04/2026, 1:18:00 p.m." o "27/04/2026, 13:18:00".
+// Devuelve null si no se puede parsear.
+//
+// Esta función se usa para:
+//   1. Migrar registros viejos de audit_logs que no tienen timestamp_unix.
+//   2. Calcular timestamp_unix al insertar nuevos registros.
+//
+// IMPORTANTE: el formato de origen siempre se interpretó como TZ México,
+// así que el unix resultante también lo refleja correctamente.
+export function parseSpanishTimestampToUnix(ts: string): number | null {
+  if (!ts || typeof ts !== 'string') return null;
+  try {
+    // Separar fecha y hora: "27/04/2026, 1:18:00 p.m." → ["27/04/2026", "1:18:00", "p.m."]
+    const parts = ts.split(/[, ]+/).filter(p => p.length > 0);
+    if (parts.length < 1) return null;
+
+    const dateParts = parts[0].split('/');
+    if (dateParts.length !== 3) return null;
+    const day = parseInt(dateParts[0], 10);
+    const month = parseInt(dateParts[1], 10);
+    const year = parseInt(dateParts[2], 10);
+    if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+
+    let hour = 0, minute = 0, second = 0;
+    if (parts[1]) {
+      const timeBits = parts[1].split(':');
+      hour = parseInt(timeBits[0], 10) || 0;
+      minute = parseInt(timeBits[1], 10) || 0;
+      second = parseInt(timeBits[2], 10) || 0;
+
+      // Manejo AM/PM si existe parts[2]
+      if (parts[2]) {
+        const ampm = parts[2].toLowerCase();
+        const isPM = ampm.includes('p');
+        const isAM = ampm.includes('a');
+        if (isPM && hour < 12) hour += 12;
+        if (isAM && hour === 12) hour = 0;
+      }
+    }
+
+    // Construir como medianoche local + offset horario, usando parseLocalDate
+    // que ya garantiza la TZ correcta sin depender del SO.
+    const dayStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayStart = parseLocalDate(dayStr);
+    if (!dayStart) return null;
+    const totalSeconds = hour * 3600 + minute * 60 + second;
+    return Math.floor(dayStart.getTime() / 1000) + totalSeconds;
+  } catch (e) {
+    return null;
+  }
 }
 
 let db: any;
@@ -106,6 +159,50 @@ try {
   } catch (e) {
     // Column already exists
   }
+
+  // FASE 1: Nueva columna timestamp_unix (INTEGER, segundos UNIX) para
+  // permitir filtrado eficiente en SQL por rangos de fecha. La columna
+  // 'timestamp' guarda strings tipo "27/04/2026, 13:18:00 p.m." que SQLite
+  // no puede comparar cronológicamente. Mantenemos ambas para compatibilidad
+  // visual (el frontend muestra el string formateado tal cual).
+  try {
+    db.exec(`ALTER TABLE audit_logs ADD COLUMN timestamp_unix INTEGER;`);
+  } catch (e) {
+    // Column already exists
+  }
+
+  // Back-fill de timestamp_unix para registros viejos que no la tienen.
+  // Parsea el string "DD/MM/YYYY, HH:MM:SS [a.m./p.m.]" y calcula el unix.
+  // Esto corre una sola vez por instalación; en sucesivos arranques los
+  // registros nuevos ya vienen con timestamp_unix poblado desde addAuditLog.
+  try {
+    const oldRows = db.prepare(`
+      SELECT id, timestamp FROM audit_logs
+      WHERE timestamp_unix IS NULL OR timestamp_unix = 0
+    `).all() as any[];
+
+    if (oldRows.length > 0) {
+      console.log(`[Migration] Calculando timestamp_unix para ${oldRows.length} registros existentes...`);
+      const updateStmt = db.prepare(`UPDATE audit_logs SET timestamp_unix = ? WHERE id = ?`);
+      const tx = db.transaction((rows: any[]) => {
+        for (const row of rows) {
+          const unix = parseSpanishTimestampToUnix(row.timestamp);
+          if (unix !== null) {
+            updateStmt.run(unix, row.id);
+          }
+        }
+      });
+      tx(oldRows);
+      console.log(`[Migration] Back-fill de timestamp_unix completado.`);
+    }
+  } catch (e) {
+    console.error('[Migration] Error en back-fill de timestamp_unix:', e);
+  }
+
+  // Índice para acelerar filtros por rango de fecha
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_audit_timestamp_unix ON audit_logs(timestamp_unix);`);
+  } catch (e) {}
 } catch (e) {
   console.error("Error initializing tables:", e);
 }
@@ -417,20 +514,26 @@ export function markTextSignatureProcessed(sig: string) {
 
 // Audit Logs Helpers
 export function addAuditLog(log: any) {
+  // FASE 1: calcular timestamp_unix al insertar para que las consultas por
+  // rango de fecha sean eficientes (índice SQL) sin tener que parsear strings
+  // en JavaScript en cada query.
+  const tsUnix = parseSpanishTimestampToUnix(log.timestamp);
+
   db.prepare(`
-    INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error, message_id, execution_type, processing_timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO audit_logs (timestamp, phone_number, action_type, nss, curp, message, error, message_id, execution_type, processing_timestamp, timestamp_unix)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    log.timestamp, 
-    log.phoneNumber, 
-    log.actionType, 
-    log.nss, 
-    log.curp, 
-    log.message, 
-    log.error, 
-    log.message_id || null, 
+    log.timestamp,
+    log.phoneNumber,
+    log.actionType,
+    log.nss,
+    log.curp,
+    log.message,
+    log.error,
+    log.message_id || null,
     log.execution_type || 'Tiempo real',
-    log.processing_timestamp || null
+    log.processing_timestamp || null,
+    tsUnix
   );
 }
 
@@ -448,6 +551,34 @@ export function getAuditLogs(limit = 1000) {
     return db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all(limit);
   } catch (e) {
     console.error("Error in getAuditLogs:", e);
+    return [];
+  }
+}
+
+// FASE 1: filtrado por rango de fechas EN SQL (no en memoria).
+// Antes el código cargaba los últimos 10,000 logs y filtraba en JS, lo que
+// significaba que si tenías más de 10k logs, los registros más antiguos
+// jamás aparecían en el filtro aunque cayeran en el rango solicitado.
+//
+// startUnix, endUnix son timestamps UNIX en segundos (ya en TZ correcta).
+// Si limit=0 no aplica límite (devuelve todos los del rango).
+export function getAuditLogsByDateRange(startUnix: number, endUnix: number, limit = 0): any[] {
+  try {
+    let sql = `
+      SELECT * FROM audit_logs
+      WHERE timestamp_unix >= ? AND timestamp_unix <= ?
+      ORDER BY id DESC
+    `;
+    const params: any[] = [startUnix, endUnix];
+
+    if (limit > 0) {
+      sql += ` LIMIT ?`;
+      params.push(limit);
+    }
+
+    return db.prepare(sql).all(...params);
+  } catch (e) {
+    console.error("Error in getAuditLogsByDateRange:", e);
     return [];
   }
 }
@@ -524,5 +655,19 @@ export function getMetadata(key: string) {
   } catch (e) {
     console.error(`Error getting metadata ${key}:`, e);
     return null;
+  }
+}
+
+// Cerrar la base de datos correctamente. Llamar al apagar la app para
+// que SQLite haga flush de WAL y libere el lock del archivo. Sin esto, en
+// reinicios rápidos la siguiente instancia podía encontrar el .db bloqueado.
+export function closeDatabase(): void {
+  try {
+    if (db && typeof db.close === 'function' && db.open) {
+      db.close();
+      console.log('[DB] Base de datos cerrada correctamente.');
+    }
+  } catch (e) {
+    console.error('[DB] Error al cerrar base de datos:', e);
   }
 }

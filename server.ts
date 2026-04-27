@@ -6,12 +6,12 @@ import { exec, execSync } from "child_process";
 import axios from "axios";
 import AdmZip from "adm-zip";
 import os from "os";
-import { startBot, stopBot, botStatus, currentQrCode, logs, getStats, getConfig, saveConfig, generateCustomCsvFromDb } from "./bot.js";
+import { startBot, stopBot, botStatus, currentQrCode, logs, getStats, getConfig, saveConfig, generateCustomCsvFromDb, shutdownSchedulers } from "./bot.js";
 import * as db from "./db.js";
 // FIX TZ: helpers de zona horaria centralizados.
 // Antes el servidor usaba now.getHours() (TZ del sistema) y new Date().toISOString()
 // para fechas, lo cual fallaba si el servidor corría en TZ distinta a México.
-import { getLocalHHMM, getLocalDateParts } from "./timezone.js";
+import { getLocalHHMM, getLocalDateParts, parseLocalDate, parseLocalDateEndOfDay } from "./timezone.js";
 
 // Global error handlers to prevent server crashes
 process.on('uncaughtException', (err) => {
@@ -23,6 +23,36 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[CRITICAL] Unhandled Rejection at:', promise, 'reason:', reason);
   // We don't exit the process to keep the server running
 });
+
+// Shutdown graceful: cuando el usuario hace Ctrl+C o el sistema envía SIGTERM
+// (ej. durante un reinicio del SO), cerramos la DB correctamente para que
+// SQLite libere el archivo y no quede bloqueado para la próxima instancia.
+let isShuttingDown = false;
+async function gracefulShutdown(signal: string) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n[Shutdown] Señal ${signal} recibida. Cerrando ordenadamente...`);
+  try {
+    await stopBot();
+  } catch (e) {
+    console.error('[Shutdown] Error deteniendo bot:', e);
+  }
+  try {
+    shutdownSchedulers();
+  } catch (e) {
+    console.error('[Shutdown] Error deteniendo schedulers:', e);
+  }
+  try {
+    db.closeDatabase();
+  } catch (e) {
+    console.error('[Shutdown] Error cerrando DB:', e);
+  }
+  console.log('[Shutdown] Listo. Saliendo.');
+  process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 async function startServer() {
   const app = express();
@@ -173,29 +203,24 @@ async function startServer() {
   app.get("/api/audit/stats", (req, res) => {
     try {
       const { startDate, endDate } = req.query;
-      const logs = db.getAuditLogs(10000); // Obtener todos los logs para filtrar
-      
-      let filteredLogs = logs;
+
+      // FASE 1: filtrado SQL en lugar de cargar 10k logs y filtrar en JS.
+      // Antes: si tenías más de 10k logs, los más viejos no se contaban.
+      // Ahora: SQL filtra exactamente lo que pides, sin límites artificiales.
+      let filteredLogs: any[];
       if (startDate && endDate) {
-        filteredLogs = logs.filter((log: any) => {
-          let logDateStr = '';
-          try {
-            const parts = log.timestamp.split(/[, ]+/);
-            const dateParts = parts[0].split('/');
-            if (dateParts.length === 3) {
-              const year = dateParts[2];
-              const month = dateParts[1].padStart(2, '0');
-              const day = dateParts[0].padStart(2, '0');
-              logDateStr = `${year}-${month}-${day}`;
-            } else {
-              logDateStr = log.timestamp.split('T')[0];
-            }
-          } catch (e) {
-            logDateStr = log.timestamp;
-          }
-          
-          return logDateStr >= startDate && logDateStr <= endDate;
-        });
+        const startObj = parseLocalDate(String(startDate));
+        const endObj = parseLocalDateEndOfDay(String(endDate));
+        if (!startObj || !endObj) {
+          return res.status(400).json({ error: "Formato de fecha inválido (use YYYY-MM-DD)" });
+        }
+        const startUnix = Math.floor(startObj.getTime() / 1000);
+        const endUnix = Math.floor(endObj.getTime() / 1000);
+        filteredLogs = db.getAuditLogsByDateRange(startUnix, endUnix);
+      } else {
+        // Sin rango: devolver todos (pero con un cap razonable de 10k para no
+        // colgar el frontend si la base creció mucho)
+        filteredLogs = db.getAuditLogs(10000);
       }
 
       const stats = {
@@ -203,7 +228,7 @@ async function startServer() {
         email: filteredLogs.filter((l: any) => l.error && l.error.includes('Email')).length,
         whatsapp: filteredLogs.filter((l: any) => l.error && l.error.includes('WA')).length,
       };
-      
+
       res.json(stats);
     } catch (e) {
       res.status(500).json({ error: "Error al calcular estadísticas" });
@@ -213,33 +238,20 @@ async function startServer() {
   app.get("/api/audit/export", (req, res) => {
     try {
       const { startDate, endDate } = req.query;
-      let logs = db.getAuditLogs(10000);
-      
+
+      // FASE 1: filtrado SQL eficiente. Antes cargaba 10k logs y filtraba en JS.
+      let logs: any[];
       if (startDate && endDate) {
-        // Parse dates assuming they are in Mexico City timezone
-        const startStr = `${startDate}T00:00:00`;
-        const endStr = `${endDate}T23:59:59`;
-        
-        // We will do string comparison on the date part of the timestamp to avoid timezone shifts
-        logs = logs.filter((log: any) => {
-          let logDateStr = '';
-          try {
-            const parts = log.timestamp.split(/[, ]+/);
-            const dateParts = parts[0].split('/');
-            if (dateParts.length === 3) {
-              const year = dateParts[2];
-              const month = dateParts[1].padStart(2, '0');
-              const day = dateParts[0].padStart(2, '0');
-              logDateStr = `${year}-${month}-${day}`;
-            } else {
-              logDateStr = log.timestamp.split('T')[0];
-            }
-          } catch (e) {
-            logDateStr = log.timestamp;
-          }
-          
-          return logDateStr >= startDate && logDateStr <= endDate;
-        });
+        const startObj = parseLocalDate(String(startDate));
+        const endObj = parseLocalDateEndOfDay(String(endDate));
+        if (!startObj || !endObj) {
+          return res.status(400).send("Formato de fecha inválido (use YYYY-MM-DD)");
+        }
+        const startUnix = Math.floor(startObj.getTime() / 1000);
+        const endUnix = Math.floor(endObj.getTime() / 1000);
+        logs = db.getAuditLogsByDateRange(startUnix, endUnix);
+      } else {
+        logs = db.getAuditLogs(10000);
       }
 
       // Add UTF-8 BOM to fix encoding issues in Excel
@@ -312,22 +324,10 @@ async function startServer() {
     }
   });
 
-  app.get("/api/audit/download/:filename", (req, res) => {
-    const filename = req.params.filename;
-    
-    // Basic security check
-    if (!filename.startsWith('audit_') || !filename.endsWith('.csv') || filename.includes('..')) {
-      return res.status(400).send("Archivo inválido");
-    }
-
-    const filepath = path.join(process.cwd(), 'bot_data', filename);
-    
-    if (!fs.existsSync(filepath)) {
-      return res.status(404).send("Archivo no encontrado");
-    }
-
-    res.download(filepath);
-  });
+  // FASE 1: Endpoint /api/audit/download/:filename eliminado.
+  // Servía archivos CSV antiguos en bot_data/audit_*.csv pero la migración a SQLite
+  // los renombró a *.bak. El endpoint nunca encontraba nada útil.
+  // El frontend usa /api/audit/export (que genera CSV on-the-fly desde SQLite).
 
   // GitHub Update API Routes
   app.get("/api/update/check", async (req, res) => {

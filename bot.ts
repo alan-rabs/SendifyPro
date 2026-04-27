@@ -132,6 +132,29 @@ let client: any = null;
 export let botStatus = 'stopped'; // 'stopped', 'starting', 'awaiting_qr', 'running', 'error'
 export let currentQrCode: string | null = null;
 
+// ─── CONTROL DE RECONEXIÓN AUTOMÁTICA ───────────────────────────────────────
+// Antes la reconexión era infinita cada 10 segundos, lo cual creaba bucle
+// eterno si WhatsApp Web te desautentica de verdad (sesión expirada, baneo,
+// etc). Ahora limitamos los intentos con backoff exponencial: si falla N veces
+// seguidas, dejamos el bot en estado 'error' para que el usuario lo reinicie
+// manualmente desde la UI tras revisar qué pasó.
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000]; // 10s, 30s, 1m, 2m, 5m
+let reconnectAttempts = 0;
+let reconnectTimeout: NodeJS.Timeout | null = null;
+
+// Resetear contador cuando una conexión funcionó bien (en client.on('ready'))
+function resetReconnectCounter(): void {
+    if (reconnectAttempts > 0) {
+        log('INFO', `🔄 Contador de reintentos de reconexión reseteado (estaba en ${reconnectAttempts}).`);
+    }
+    reconnectAttempts = 0;
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+    }
+}
+
 function cleanupOrphanedTempFiles() {
     try {
         const tempDir = path.join(process.cwd(), 'bot_data', 'temp_attachments');
@@ -210,6 +233,9 @@ export async function startBot() {
         log('INFO', '✅ WhatsApp Web conectado y listo.');
         botStatus = 'running';
         currentQrCode = null;
+        // Conexión exitosa: resetear contador de reintentos para no agotar
+        // los intentos restantes en futuras desconexiones legítimas.
+        resetReconnectCounter();
         log('INFO', `Escuchando mensajes de ${config.chatConfigs?.length || 0} chats configurados.`);
 
         // Aplicar parche de carga histórica antes de cualquier recuperación de mensajes
@@ -394,13 +420,26 @@ export async function startBot() {
         botStatus = 'stopped';
         client = null;
 
-        // Auto-reconnect after 10 seconds
-        log('INFO', 'Intentando reconexión automática en 10 segundos...');
-        setTimeout(() => {
+        // FIX: reconexión con backoff exponencial limitado.
+        // Antes era cada 10 segundos infinito → si WA invalidaba la sesión
+        // (baneo, logout desde el celular), entrabamos en bucle eterno.
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            log('ERROR', `❌ Se agotaron los ${MAX_RECONNECT_ATTEMPTS} intentos de reconexión. Bot detenido. Revisa la sesión y reinicia manualmente desde la UI.`);
+            botStatus = 'error';
+            reconnectAttempts = 0; // Resetear para futuro start manual
+            return;
+        }
+
+        const delay = RECONNECT_DELAYS_MS[reconnectAttempts] || 300_000;
+        reconnectAttempts++;
+        log('INFO', `Intentando reconexión automática en ${delay / 1000}s (intento ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
+
+        reconnectTimeout = setTimeout(() => {
+            reconnectTimeout = null;
             if (botStatus === 'stopped') {
                 startBot();
             }
-        }, 10000);
+        }, delay);
     });
 
     client.on('message_create', async (msg: any) => {
@@ -1193,7 +1232,11 @@ async function processMessage(msg: any): Promise<ProcessResult> {
 
                 let emailSent = false;
                 let waSent = false;
-                let processingError = false;
+                // FIX BUG: NO redeclarar processingError aquí (estaba causando shadowing).
+                // Antes, los errores de envío de email/WhatsApp se asignaban a una variable
+                // local que moría al salir del bloque, así que un mensaje con fallo de envío
+                // se marcaba como procesado y no se reintentaba. Ahora propagamos al scope
+                // externo declarado al inicio de processMessage.
 
                 const uniqueEmailBodies = new Set<string>();
                 const uniqueWaBodies = new Set<string>();
@@ -1522,6 +1565,15 @@ export async function runValidationSweep(targetDate: string, targetContact?: str
 }
 
 export async function stopBot() {
+    // Cancelar cualquier reconexión automática pendiente. Si el usuario detuvo
+    // el bot manualmente, no queremos que se vuelva a iniciar solo.
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+        log('INFO', 'Reconexión automática cancelada por detención manual.');
+    }
+    reconnectAttempts = 0;
+
     if (!client) {
         botStatus = 'stopped';
         currentQrCode = null;
@@ -1676,8 +1728,12 @@ async function processEmailQueue() {
     });
 }
 
+// Referencias a los timers para poder limpiarlos en shutdownSchedulers().
+// Antes estos setInterval quedaban huérfanos: aunque hicieras stopBot() seguían
+// corriendo, manteniendo Node vivo y consumiendo recursos. En reinicios
+// rápidos (auto-update) dos instancias de cada timer podían solaparse.
 let lastScheduleRun = '';
-setInterval(() => {
+const emailBatchScheduler: NodeJS.Timeout = setInterval(() => {
     if (!config.emailBatchingEnabled) return;
 
     // FIX TZ: hora actual en México (no del sistema operativo)
@@ -1851,9 +1907,6 @@ async function sendToWhatsAppChats(targetNamesStr: string, message: string, medi
 
 // Función para generar un CSV personalizado basado en una plantilla desde SQLite
 export function generateCustomCsvFromDb(columns: string[], timeRange: string | {start: string, end: string} = 'today', rules?: string[], splitByRule?: boolean): { content: string | Buffer, count: number, isXlsx: boolean } | null {
-    const logs = db.getAuditLogs(10000); // Get last 10k logs for the report
-    if (logs.length === 0) return null;
-
     // FIX TZ: todos los rangos se calculan respecto a la fecha actual de México
     // (no del sistema operativo). Esto evita que en un VPS con TZ distinta el
     // reporte "de hoy" cubra un día equivocado.
@@ -1935,47 +1988,17 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
         }
     }
 
-    const filteredLogs = logs.filter((log: any) => {
-        if (rules && rules.length > 0 && !rules.includes(log.action_type)) {
-            return false;
-        }
+    // FASE 1: filtrado SQL eficiente. Antes esto cargaba 10k logs y filtraba
+    // en JS, perdiendo registros si tenías más logs. Ahora SQL devuelve sólo
+    // los del rango exacto (sin límite), y luego sólo filtramos por reglas
+    // (que es un filtro muy barato sobre un set ya pequeño).
+    const startUnix = Math.floor(start.getTime() / 1000);
+    const endUnix = Math.floor(end.getTime() / 1000);
+    const logsInRange = db.getAuditLogsByDateRange(startUnix, endUnix);
 
-        let logDate;
-        try {
-            // log.timestamp viene como "DD/MM/YYYY, HH:mm:ss" o "DD/MM/YYYY, HH:mm:ss a.m."
-            // (formato es-MX). Lo convertimos a "YYYY-MM-DD" + hora para usar parseLocalDate.
-            const parts = log.timestamp.split(/[, ]+/);
-            const dateParts = parts[0].split('/');
-            if (dateParts.length === 3) {
-                let hours = parts[1] ? parseInt(parts[1].split(':')[0]) : 0;
-                const isPM = parts[2] && parts[2].toLowerCase().includes('p');
-                const isAM = parts[2] && parts[2].toLowerCase().includes('a');
-                if (isPM && hours < 12) hours += 12;
-                if (isAM && hours === 12) hours = 0;
-
-                const minutes = parts[1] ? parseInt(parts[1].split(':')[1]) || 0 : 0;
-                const seconds = parts[1] ? parseInt(parts[1].split(':')[2]) || 0 : 0;
-
-                // FIX TZ: construir el Date como medianoche local de México y sumar
-                // las horas/minutos/segundos. Así start/end y logDate están en la
-                // misma referencia temporal y la comparación es correcta.
-                const dayStr = `${dateParts[2]}-${dateParts[1].padStart(2, '0')}-${dateParts[0].padStart(2, '0')}`;
-                const dayStart = parseLocalDate(dayStr);
-                if (dayStart) {
-                    logDate = new Date(dayStart.getTime() + (hours * 3600 + minutes * 60 + seconds) * 1000);
-                } else {
-                    logDate = new Date(log.timestamp);
-                }
-            } else {
-                logDate = new Date(log.timestamp);
-            }
-        } catch (e) {
-            logDate = new Date(log.timestamp);
-        }
-
-        if (isNaN(logDate.getTime())) return false;
-        return logDate >= start && logDate <= end;
-    });
+    const filteredLogs = rules && rules.length > 0
+        ? logsInRange.filter((log: any) => rules.includes(log.action_type))
+        : logsInRange;
 
     if (filteredLogs.length === 0) return null;
 
@@ -2044,7 +2067,7 @@ export function generateCustomCsvFromDb(columns: string[], timeRange: string | {
 }
 
 // Programar tareas para reportes y plantillas personalizadas
-setInterval(async () => {
+const reportsScheduler: NodeJS.Timeout = setInterval(async () => {
     // FIX TZ: usar helpers centralizados. Antes se construía un Date "fake" haciendo
     // new Date(new Date().toLocaleString(...)) que es frágil y depende de cómo
     // el navegador parsee el string formateado (varía entre versiones de Node).
@@ -2246,9 +2269,25 @@ setInterval(async () => {
 }, 60000); // Revisar cada minuto
 
 // Reiniciar estadísticas diarias a medianoche (en TZ centralizada)
-cron.schedule('0 0 * * *', () => {
+const dailyResetCron = cron.schedule('0 0 * * *', () => {
     log('INFO', 'Ejecutando reinicio de estadísticas diarias...');
     db.resetDailyStats();
 }, {
     timezone: TIMEZONE
 });
+
+// Cerrar todos los schedulers en orden. Llamar al apagar la aplicación
+// (desde server.ts en gracefulShutdown). Sin esto, Node se queda vivo
+// indefinidamente esperando que los timers expiren.
+export function shutdownSchedulers(): void {
+    try {
+        clearInterval(emailBatchScheduler);
+        clearInterval(reportsScheduler);
+        if (dailyResetCron && typeof dailyResetCron.stop === 'function') {
+            dailyResetCron.stop();
+        }
+        log('INFO', 'Schedulers detenidos correctamente.');
+    } catch (e: any) {
+        log('ERROR', `Error deteniendo schedulers: ${e.message}`);
+    }
+}
